@@ -90,13 +90,20 @@ export default function ImageCardNode({ id, data, selected }: NodeProps<ImageCar
 
   return (
     <div
-      className={`relative group transition-shadow rounded-md select-none ${
-        selected ? "shadow-[0_0_20px_rgba(212,106,67,0.4)] ring-2 ring-[var(--color-accent)]/80" : "hover:shadow-lg"
-      }`}
-      style={{ width: `${width}px`, height: `${height}px` }}
+      className="relative group transition-shadow rounded-md select-none"
+      style={{
+        width: `${width}px`,
+        height: `${height}px`,
+        boxShadow: selected ? "0 0 20px var(--color-accent-soft)" : undefined,
+        outline: selected ? "2px solid var(--color-accent)" : "none",
+        outlineOffset: "2px",
+      }}
     >
       {/* 1. CORE FLOATING IMAGE SCREEN CONTAINER */}
-      <div className="w-full h-full rounded-xl overflow-hidden bg-black/5 select-none dragging-handle cursor-grab active:cursor-grabbing">
+      <div
+        className="w-full h-full rounded-xl overflow-hidden select-none dragging-handle cursor-grab active:cursor-grabbing"
+        style={{ background: "var(--color-surface)" }}
+      >
         {previewUrl ? (
           <img
             src={previewUrl}
@@ -105,7 +112,10 @@ export default function ImageCardNode({ id, data, selected }: NodeProps<ImageCar
             draggable={false}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-xs text-slate-500 bg-slate-900/40 font-mono">
+          <div
+            className="w-full h-full flex items-center justify-center text-xs font-mono"
+            style={{ color: "var(--color-muted)" }}
+          >
             Missing Img
           </div>
         )}
@@ -115,7 +125,7 @@ export default function ImageCardNode({ id, data, selected }: NodeProps<ImageCar
       <button
         type="button"
         onClick={handleDelete}
-        className="nodrag absolute top-2 right-2 p-1.5 rounded-lg bg-black/70 text-slate-400 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-md border border-white/5 cursor-pointer"
+        className="nodrag absolute top-2 right-2 p-1.5 rounded-lg bg-black/70 text-white/70 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity z-50 shadow-md border border-white/10 cursor-pointer"
         title="Remove Sticker"
       >
         <Trash2 size={12} />
@@ -124,7 +134,7 @@ export default function ImageCardNode({ id, data, selected }: NodeProps<ImageCar
       {/* 3. DRAG RESIZE GRIP INLINE HANDLE */}
       <div
         onPointerDown={startResize}
-        className={`nodrag absolute bottom-2 right-2 rounded-md bg-black/70 p-1 text-slate-400 border border-white/10 shadow-md backdrop-blur-sm transition-all cursor-nwse-resize hover:text-white hover:scale-105 active:scale-95 z-50 ${
+        className={`nodrag absolute bottom-2 right-2 rounded-md bg-black/70 p-1 text-white/70 border border-white/10 shadow-md backdrop-blur-sm transition-all cursor-nwse-resize hover:text-white hover:scale-105 active:scale-95 z-50 ${
           selected ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >

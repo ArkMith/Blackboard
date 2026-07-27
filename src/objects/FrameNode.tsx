@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { NodeProps, useUpdateNodeInternals } from "reactflow";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import { MoveDownRight, LayoutGrid, Type } from "lucide-react";
+import { MoveDownRight, LayoutGrid } from "lucide-react";
 
 export default function FrameNode({ id, data, selected }: NodeProps) {
   const updateNodeInternals = useUpdateNodeInternals();
@@ -80,20 +80,28 @@ export default function FrameNode({ id, data, selected }: NodeProps) {
 
   return (
     <div
-      className={`font-mono antialiased text-xs select-none transition-shadow duration-150 border rounded-md relative flex flex-col h-full w-full ${
-        selected 
-          ? "border-slate-500 bg-[#0d1118]/80 shadow-[0_4px_30px_rgba(0,0,0,0.4)]" 
-          : "border-slate-800/60 bg-[#080b10]/40"
-      }`}
-      style={{ width: `${width}px`, height: `${height}px` }}
+      className="font-mono antialiased text-xs select-none transition-shadow duration-150 border rounded-md relative flex flex-col h-full w-full"
+      style={{
+        width: `${width}px`,
+        height: `${height}px`,
+        borderColor: selected ? "var(--color-accent-border)" : "var(--color-border)",
+        background: selected ? "var(--color-surface-hover)" : "var(--color-surface)",
+        opacity: selected ? 0.92 : 0.7,
+        boxShadow: selected ? "0 4px 30px rgba(0,0,0,0.12)" : undefined,
+      }}
     >
       
       {/* 1. TOP MINIMAL HEADER ATTACHMENT TAB */}
-      <div className={`flex items-center justify-between border-b px-3 py-2 text-[10px] font-bold uppercase tracking-wider dragging-handle cursor-grab active:cursor-grabbing text-slate-500 h-9 shrink-0 ${
-        selected ? "bg-[#111622] border-slate-700/80" : "bg-black/10 border-slate-800/40"
-      }`}>
+      <div
+        className="flex items-center justify-between border-b px-3 py-2 text-[10px] font-bold uppercase tracking-wider dragging-handle cursor-grab active:cursor-grabbing h-9 shrink-0"
+        style={{
+          color: "var(--color-muted)",
+          borderColor: "var(--color-border)",
+          background: selected ? "var(--color-surface)" : "transparent",
+        }}
+      >
         <div className="flex items-center gap-2 max-w-[80%]">
-          <LayoutGrid size={11} className={selected ? "text-[var(--color-accent)]" : "text-slate-600"} />
+          <LayoutGrid size={11} style={{ color: selected ? "var(--color-accent)" : "var(--color-muted)" }} />
           
           {editingTitle ? (
             <input
@@ -105,12 +113,14 @@ export default function FrameNode({ id, data, selected }: NodeProps) {
                 e.stopPropagation(); // Block canvas backspace triggers
                 if (e.key === "Enter") saveTitle();
               }}
-              className="nodrag bg-black/50 border border-slate-700 px-2 py-0.5 rounded text-[10px] text-white font-bold outline-none uppercase w-full"
+              className="nodrag border px-2 py-0.5 rounded text-[10px] font-bold outline-none uppercase w-full"
+              style={{ background: "var(--color-bg)", borderColor: "var(--color-border)", color: "var(--color-text)" }}
             />
           ) : (
             <span 
               onDoubleClick={() => setEditingTitle(true)}
-              className="text-slate-400 hover:text-white transition-colors cursor-text truncate block px-0.5"
+              className="hover:opacity-100 transition-opacity cursor-text truncate block px-0.5"
+              style={{ opacity: 0.85 }}
               title="Double-click to rename group container"
             >
               {title}
@@ -118,7 +128,7 @@ export default function FrameNode({ id, data, selected }: NodeProps) {
           )}
         </div>
 
-        <div className="text-[9px] opacity-40 font-mono tracking-tight shrink-0 select-none">
+        <div className="text-[9px] opacity-50 font-mono tracking-tight shrink-0 select-none">
           {width}x{height}
         </div>
       </div>
@@ -126,16 +136,24 @@ export default function FrameNode({ id, data, selected }: NodeProps) {
       {/* 2. FLAT BACKGROUND BOUNDARY ZONE GRID CANVAS */}
       <div className="flex-1 relative overflow-hidden pointer-events-none p-3 border-dashed border border-transparent">
         {/* Background blueprint guide marks inside frames */}
-        <div className="absolute inset-0 opacity-[0.015] bg-[linear-gradient(to_right,#fff_1px,transparent_1px),linear-gradient(to_bottom,#fff_1px,transparent_1px)] bg-[size:15px_15px] pointer-events-none" />
+        <div
+          className="absolute inset-0 opacity-[0.05] pointer-events-none"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, var(--color-text) 1px, transparent 1px), linear-gradient(to bottom, var(--color-text) 1px, transparent 1px)",
+            backgroundSize: "15px 15px",
+          }}
+        />
       </div>
 
       {/* 3. PURE CORNER DRAG PULL GRIP INTERACTIVE HANDLE */}
       {/* nodrag prevents ReactFlow from moving the whole card instead of resizing */}
       <div
         onPointerDown={startResize}
-        className={`nodrag absolute bottom-1.5 right-1.5 p-1 rounded border shadow-md transition-all cursor-nwse-resize text-slate-500 border-slate-800 bg-[#0d121f] hover:text-white hover:scale-105 active:scale-95 z-50 ${
+        className={`nodrag absolute bottom-1.5 right-1.5 p-1 rounded border shadow-md transition-all cursor-nwse-resize hover:scale-105 active:scale-95 z-50 ${
           selected ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"
         }`}
+        style={{ color: "var(--color-muted)", borderColor: "var(--color-border)", background: "var(--color-surface)" }}
         title="Drag to resize frame bounding layer"
       >
         <MoveDownRight size={11} />

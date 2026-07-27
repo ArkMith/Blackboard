@@ -1,10 +1,10 @@
 [package]
-name = "app"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
+name = "Blackboard"
+version = "1.0.0"
+description = "Creative Management App"
+authors = ["ArkMith"]
+license = "GPL v3.0"
+repository = "https://github.com/ArkMith/Blackboard"
 edition = "2021"
 rust-version = "1.77.2"
 
