@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Blackboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&family=Manrope:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --color-bg: #fcfaf7;
+      --color-surface: #ffffff;
+      --color-text: #2a2421;
+      --color-muted: #6b5c52;
+      --color-accent: #d46a43;
+      --color-accent-soft: rgba(212, 106, 67, 0.08);
+      --color-accent-border: rgba(212, 106, 67, 0.2);
+      --color-border: rgba(42, 36, 21, 0.12);
+      --color-stripe-a: rgba(212, 106, 67, 0.07);
+      --color-stripe-b: rgba(239, 159, 39, 0.05);
+      color-scheme: light;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --color-bg: #0f0d0b;
+        --color-surface: #1a1410;
+        --color-text: #f4e8dc;
+        --color-muted: #acacac;
+        --color-accent: #f38b6d;
+        --color-accent-soft: rgba(243, 139, 109, 0.08);
+        --color-accent-border: rgba(243, 139, 109, 0.18);
+        --color-border: rgba(244, 232, 220, 0.1);
+        --color-stripe-a: rgba(216, 90, 48, 0.06);
+        --color-stripe-b: rgba(239, 159, 39, 0.04);
+        color-scheme: dark;
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; width: 100%; }
+
+    body {
+      background-color: var(--color-bg);
+      color: var(--color-text);
+      font-family: "Manrope", ui-sans-serif, system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      position: relative;
+    }
+
+    /* Diagonal stripe background, matching brand pattern */
+    .stripes {
+      position: absolute;
+      inset: 0;
+      background-image: repeating-linear-gradient(
+        -45deg,
+        var(--color-stripe-a) 0px,
+        var(--color-stripe-a) 46px,
+        transparent 46px,
+        transparent 92px,
+        var(--color-stripe-b) 92px,
+        var(--color-stripe-b) 138px,
+        transparent 138px,
+        transparent 184px
+      );
+      z-index: 0;
+    }
+
+    .stage {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 34px;
+      width: 100%;
+      max-width: 640px;
+      padding: 48px;
+      text-align: center;
+    }
+
+    .app-mark {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .app-logo {
+      width: 96px;
+      height: 96px;
+      border-radius: 26px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      box-shadow: 0 12px 34px var(--color-accent-soft);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+    }
+
+    .app-logo img { width: 100%; height: 100%; object-fit: contain; }
+
+    .app-name {
+      font-family: "Poppins", ui-sans-serif, system-ui, sans-serif;
+      font-weight: 800;
+      font-size: 44px;
+      letter-spacing: -0.02em;
+      color: var(--color-text);
+    }
+
+    .app-tagline {
+      font-size: 14px;
+      color: var(--color-muted);
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+
+    .loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .spinner {
+      width: 30px;
+      height: 30px;
+      border: 3px solid var(--color-accent-soft);
+      border-top-color: var(--color-accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .loading-label {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .footer {
+      position: absolute;
+      bottom: 30px;
+      left: 0;
+      right: 0;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .branding {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px 6px 6px;
+      border-radius: 999px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+    }
+
+    .branding img {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: var(--color-accent-soft);
+    }
+
+    .branding span { font-size: 12px; font-weight: 600; color: var(--color-muted); }
+    .branding b { color: var(--color-text); font-weight: 700; }
+
+    .version {
+      font-family: "Roboto Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: var(--color-muted);
+      opacity: 0.7;
+      letter-spacing: 0.02em;
+    }
+  </style>
+</head>
+<body>
+  <div class="stripes"></div>
+
+  <div class="stage">
+    <div class="app-mark">
+      <div class="app-logo">
+        <img src="/blackboard-logo.png" alt="Blackboard" />
+      </div>
+      <div class="app-name">Blackboard</div>
+      <div class="app-tagline">Workspace Canvas</div>
+    </div>
+
+    <div class="loading">
+      <div class="spinner"></div>
+      <div class="loading-label">Loading&hellip;</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="branding">
+      <img src="/redpanda-logo.png" alt="Ark Mith" />
+      <span>By <b>Ark Mith</b></span>
+    </div>
+    <div class="version">v0.1.0</div>
+  </div>
+</body>
+</html>

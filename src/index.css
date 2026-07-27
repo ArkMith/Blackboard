@@ -1,0 +1,168 @@
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&family=Roboto+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+/* --- THEME VARIATION MATRIX --- */
+html {
+  --color-bg: #fcfaf7;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f7f3ed;
+  --color-text: #2a2421;
+  --color-muted: #6b5c52;
+  --color-accent: #d46a43;
+  --color-accent-soft: rgba(212, 106, 67, 0.08);
+  --color-accent-border: rgba(212, 106, 67, 0.2);
+  --color-border: rgba(42, 36, 21, 0.12);
+  --color-grid: rgba(42, 36, 33, 0.03);
+  --color-stripe-a: rgba(212, 106, 67, 0.06);
+  --color-stripe-b: rgba(239, 159, 39, 0.04);
+  --color-danger: #d4483f;
+
+  /* Typography */
+  --font-display: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, monospace;
+
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --color-bg: #0f0d0b;
+  --color-surface: #1a1410;
+  --color-surface-hover: #231a13;
+  --color-text: #f4e8dc;
+  --color-muted: #acacac;
+  --color-accent: #f38b6d;
+  --color-accent-soft: rgba(243, 139, 109, 0.08);
+  --color-accent-border: rgba(243, 139, 109, 0.18);
+  --color-border: rgba(244, 232, 220, 0.1);
+  --color-grid: rgba(243, 139, 109, 0.04);
+  --color-stripe-a: rgba(216, 90, 48, 0.05);
+  --color-stripe-b: rgba(239, 159, 39, 0.03);
+  --color-danger: #f38b6d;
+
+  color-scheme: dark;
+}
+
+/* Respect system preference automatically, unless the user has picked a theme explicitly */
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) { color-scheme: light; }
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    --color-bg: #0f0d0b;
+    --color-surface: #1a1410;
+    --color-surface-hover: #231a13;
+    --color-text: #f4e8dc;
+    --color-muted: #acacac;
+    --color-accent: #f38b6d;
+    --color-accent-soft: rgba(243, 139, 109, 0.08);
+    --color-accent-border: rgba(243, 139, 109, 0.18);
+    --color-border: rgba(244, 232, 220, 0.1);
+    --color-grid: rgba(243, 139, 109, 0.04);
+    --color-stripe-a: rgba(216, 90, 48, 0.05);
+    --color-stripe-b: rgba(239, 159, 39, 0.03);
+    --color-danger: #f38b6d;
+    color-scheme: dark;
+  }
+}
+
+/* --- Tailwind v4 theme mapping: exposes bg-app-bg, text-app-text, border-app-border, font-display, etc. ---
+   Token names are namespaced (app-*) so they don't collide with the raw runtime
+   custom properties above, which flip between light/dark via html[data-theme]. */
+@theme {
+  --color-app-bg: var(--color-bg);
+  --color-app-surface: var(--color-surface);
+  --color-app-surface-hover: var(--color-surface-hover);
+  --color-app-text: var(--color-text);
+  --color-app-muted: var(--color-muted);
+  --color-app-accent: var(--color-accent);
+  --color-app-accent-soft: var(--color-accent-soft);
+  --color-app-accent-border: var(--color-accent-border);
+  --color-app-border: var(--color-border);
+  --color-app-danger: var(--color-danger);
+
+  --font-display: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+h1, h2, h3, h4, h5, h6,
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono, code, pre {
+  font-family: var(--font-mono);
+}
+
+/* Diagonal stripe background helper, matching the splash/brand pattern */
+.bg-brand-stripes {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--color-stripe-a) 0px,
+    var(--color-stripe-a) 40px,
+    transparent 40px,
+    transparent 80px,
+    var(--color-stripe-b) 80px,
+    var(--color-stripe-b) 120px,
+    transparent 120px,
+    transparent 160px
+  );
+}
+
+/* --- UNIVERSAL TOUCH INTERACTION HANDLE ENHANCEMENT --- */
+.react-flow__handle {
+  z-index: 100 !important;
+  /* Keep the physical visual size of the dot clean and small */
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 2px !important; /* Strict sharp Notion box edges */
+  transition: background-color 0.15s ease, transform 0.15s ease !important;
+}
+
+/* HIGH-DENSITY INVISIBLE TOUCH INJECTOR LAYER */
+.react-flow__handle::after {
+  content: '';
+  position: absolute;
+  /* Center the giant hit-box perfectly over the tiny dot */
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+
+  /* Create a massive 32px square active touch target area of influence */
+  width: 32px !important;
+  height: 32px !important;
+
+  /* Keep it transparent so it doesn't clutter your minimal visual canvas */
+  background: transparent !important;
+  border-radius: 50%;
+  cursor: pointer;
+
+  /* Ensure touch signals pass directly to your fingertips */
+  pointer-events: auto !important;
+}
+
+/* Visual feedback state when a finger hovers or holds near the port trigger */
+.react-flow__handle:hover,
+.react-flow__handle.connecting {
+  transform: scale(1.25);
+  background-color: var(--color-accent) !important;
+}
