@@ -23,7 +23,8 @@ import {
   Eye,
   Grid,
   AlertTriangle,
-  X
+  X,
+  FileText
 } from "lucide-react";
 
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -45,6 +46,9 @@ import AssetPipelineNode from "../objects/AssetPipelineNode";
 import ImageCardNode from "../objects/ImageCardNode";
 import TimelineNode from "../objects/TimelineNode";
 import TextBlockNode from "../objects/TextBlockNode";
+import PdfPageNode from "../objects/PdfPageNode";
+import { renderPdfPages, buildPdfPageObjects, type PdfDocumentResult } from "../utils/pdf";
+import { pickPdfSource, readPdfSource } from "../utils/pdfOpen";
 
 function UnknownNode({ data }: NodeProps) {
   return (
@@ -64,6 +68,7 @@ const nodeTypes = {
   imageCard: ImageCardNode,
   timeline: TimelineNode,
   textBlock: TextBlockNode,
+  pdfPage: PdfPageNode,
   unknown: UnknownNode,
 };
 
@@ -188,6 +193,7 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   const addObject = useWorkspaceStore((s) => s.addObject);
+  const [isImportingPdf, setIsImportingPdf] = useState(false);
   const undoDrawing = useWorkspaceStore((state) => state.undoDrawing);
   const redoDrawing = useWorkspaceStore((state) => state.redoDrawing);
   const clearDrawings = useWorkspaceStore((state) => state.clearDrawings);
@@ -276,13 +282,24 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
     const files = Array.from(e.dataTransfer.files);
     if (!files.length) return;
 
+    const isPdfFile = (file: File) =>
+      file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
     const imageFiles = files.filter((file) => file.type.startsWith("image/"));
-    if (!imageFiles.length) return;
+    const pdfFiles = files.filter(isPdfFile);
 
     const position = reactFlowInstance.screenToFlowPosition({
       x: e.clientX,
       y: e.clientY,
     });
+
+    pdfFiles.forEach((file) => {
+      file
+        .arrayBuffer()
+        .then((buffer) => importPdfBytes(new Uint8Array(buffer), { fileName: file.name }, position));
+    });
+
+    if (!imageFiles.length) return;
 
     imageFiles.forEach((file) => {
       const reader = new FileReader();
@@ -689,6 +706,90 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
     reader.readAsDataURL(file);
   };
 
+  /**
+   * Turn a rendered PDF into a sequence of pdfPage nodes on the canvas.
+   * Each page becomes its own board object/node, stacked vertically like a
+   * document viewer (or anchored at `origin` when the PDF was dropped/opened
+   * at a specific spot).
+   */
+  const addPdfObjectsToCanvas = (
+    result: PdfDocumentResult,
+    origin?: { x: number; y: number }
+  ) => {
+    const pageObjects = buildPdfPageObjects(result, useWorkspaceStore.getState().objects, origin);
+
+    pageObjects.forEach((object) => {
+      addObject(object);
+
+      setNodes((nds) => [
+        ...nds,
+        {
+          id: object.id,
+          type: "pdfPage",
+          position: { x: object.x, y: object.y },
+          style: { width: object.width, height: object.height },
+          data: {
+            label: object.title,
+            previewUrl: object.previewUrl,
+            width: object.width,
+            height: object.height,
+            pageNumber: object.pageNumber,
+            pageCount: object.pageCount,
+            sourceFileName: object.sourceFileName,
+          },
+        },
+      ]);
+    });
+  };
+
+  /** Read a PDF's raw bytes regardless of whether it came from a File or a native path. */
+  const importPdfBytes = async (
+    bytes: Uint8Array,
+    options: { fileName: string; sourceFilePath?: string },
+    origin?: { x: number; y: number }
+  ) => {
+    setIsImportingPdf(true);
+    try {
+      const result = await renderPdfPages(bytes, {
+        fileName: options.fileName,
+        sourceFilePath: options.sourceFilePath,
+      });
+      addPdfObjectsToCanvas(result, origin);
+    } catch (err) {
+      console.error("[Workspace] Failed to render dropped/opened PDF:", err);
+      alert("Couldn't open that PDF — see console for details.");
+    } finally {
+      setIsImportingPdf(false);
+    }
+  };
+
+  /** Toolbox entry point: opens the OS file picker (or Tauri dialog) for a PDF. */
+  const openPdfPicker = async () => {
+    if (isImportingPdf) return;
+
+    try {
+      const source = await pickPdfSource();
+      if (!source) return;
+
+      const bytes = await readPdfSource(source);
+      const centerPosition = reactFlowInstance
+        ? reactFlowInstance.screenToFlowPosition({
+            x: window.innerWidth / 2,
+            y: window.innerHeight / 2,
+          })
+        : undefined;
+
+      await importPdfBytes(
+        bytes,
+        { fileName: source.fileName, sourceFilePath: source.path },
+        centerPosition
+      );
+    } catch (err) {
+      console.error("[Workspace] Failed to open PDF from picker:", err);
+      alert("Couldn't open that PDF — see console for details.");
+    }
+  };
+
   const isCanvasActive = isDrawingMode || isEraserMode;
 
   useEffect(() => {
@@ -708,6 +809,27 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
 
           droppedPaths.forEach((filePath: string) => {
             const fileName = filePath.split(/[\\/]/).pop() || "Sticker Resource";
+
+            if (fileName.toLowerCase().endsWith(".pdf")) {
+              (async () => {
+                try {
+                  // Raw webview drag-and-drop paths aren't pre-authorized in
+                  // the fs scope the way file-association or dialog-picked
+                  // paths are — ask Rust to allow this specific file first.
+                  const { invoke } = await import("@tauri-apps/api/core");
+                  await invoke("allow_file_path", { path: filePath });
+
+                  const { readPdfFile } = await import("../utils/pdf");
+                  const bytes = await readPdfFile(filePath);
+                  await importPdfBytes(bytes, { fileName, sourceFilePath: filePath }, centerPosition);
+                } catch (err) {
+                  console.error("[Workspace] Failed to read dropped PDF from disk:", err);
+                  alert("Couldn't open that PDF — see console for details.");
+                }
+              })();
+              return;
+            }
+
             const newImageId = crypto.randomUUID();
             const defaultWidth = 240;
             const defaultHeight = 180;
@@ -944,6 +1066,16 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
                   >
                     <Type size={12} /> Text Block
                   </button>
+                  <button
+                    onClick={() => {
+                      openPdfPicker();
+                      setActiveMenu(null);
+                    }}
+                    disabled={isImportingPdf}
+                    className="w-full text-left px-3 py-1.5 hover:bg-[var(--color-accent)] hover:text-white flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    <FileText size={12} /> {isImportingPdf ? "Importing PDF…" : "PDF Document"}
+                  </button>
                 </div>
               )}
             </div>
@@ -1162,6 +1294,14 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
             </button>
             <button onClick={() => addTextBlockNode("textBlock")} className="p-1.5 rounded hover:bg-white/10 hover:text-white cursor-pointer" title="Add Text">
               <Type size={14} />
+            </button>
+            <button
+              onClick={openPdfPicker}
+              disabled={isImportingPdf}
+              className="p-1.5 rounded hover:bg-white/10 hover:text-white cursor-pointer disabled:opacity-50"
+              title={isImportingPdf ? "Importing PDF…" : "Add PDF"}
+            >
+              <FileText size={14} className={isImportingPdf ? "animate-pulse" : ""} />
             </button>
           </div>
 

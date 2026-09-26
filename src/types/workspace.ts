@@ -5,7 +5,8 @@ export type WorkspaceObjectType =
   | "assetPipeline"
   | "imageCard"
   | "timeline"
-  | "textBlock";
+  | "textBlock"
+  | "pdfPage";
 
 export interface WorkspaceObject {
   id: string;
@@ -42,4 +43,10 @@ export interface WorkspaceObject {
     text: string;
     done: boolean;
   }>;
+
+  // pdfPage-specific fields (see utils/pdf.ts)
+  sourceFilePath?: string;
+  sourceFileName?: string;
+  pageNumber?: number;
+  pageCount?: number;
 }

@@ -4,7 +4,7 @@ import type { WorkspaceObject } from "../types/workspace";
 import { localGet, localSet } from "../utils/localStore";
 import { buildEnvelope, exportWorkspacePackage, importWorkspacePackage } from "../utils/arkPackage";
 
-interface WorkspaceMetadata {
+export interface WorkspaceMetadata {
   id: string;
   name: string;
   createdAt: string;

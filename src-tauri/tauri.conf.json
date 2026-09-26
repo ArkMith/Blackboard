@@ -49,6 +49,16 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "fileAssociations": [
+    {
+      "ext": ["pdf"],
+      "mimeType": "application/pdf",
+      "name": "PDF Document",
+      "description": "PDF document",
+      "role": "Viewer",
+      "rank": "Alternate"
     }
+  ]
   }
 }
