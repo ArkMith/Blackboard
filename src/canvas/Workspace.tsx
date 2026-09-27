@@ -342,33 +342,74 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
     imageFiles.forEach((file) => {
       const reader = new FileReader();
       reader.onload = () => {
-        const newImageId = crypto.randomUUID();
-        const defaultWidth = 240;
-        const defaultHeight = 180;
+        const img = new Image();
+        img.src = reader.result as string;
 
-        const newObject = {
-          id: newImageId,
-          type: "imageCard" as const,
-          title: file.name,
-          x: position.x,
-          y: position.y,
-          width: defaultWidth,
-          height: defaultHeight,
-          previewUrl: reader.result as string,
+        img.onload = () => {
+          const offscreenCanvas = document.createElement("canvas");
+          const ctx = offscreenCanvas.getContext("2d");
+
+          const MAX_WIDTH = 800;
+          const MAX_HEIGHT = 600;
+          let targetWidth = img.width;
+          let targetHeight = img.height;
+
+          if (targetWidth > targetHeight) {
+            if (targetWidth > MAX_WIDTH) {
+              targetHeight *= MAX_WIDTH / targetWidth;
+              targetWidth = MAX_WIDTH;
+            }
+          } else {
+            if (targetHeight > MAX_HEIGHT) {
+              targetWidth *= MAX_HEIGHT / targetHeight;
+              targetHeight = MAX_HEIGHT;
+            }
+          }
+
+          offscreenCanvas.width = targetWidth;
+          offscreenCanvas.height = targetHeight;
+
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+            const compressedDataUrl = offscreenCanvas.toDataURL("image/jpeg", 0.7);
+
+            const id = createId();
+            const defaultWidth = 240;
+            const defaultHeight = 180;
+
+            const newObject = {
+              id,
+              type: "imageCard" as const,
+              title: file.name,
+              x: position.x,
+              y: position.y,
+              width: defaultWidth,
+              height: defaultHeight,
+              previewUrl: compressedDataUrl,
+            };
+
+            addObject(newObject);
+
+            setNodes((nds) => [
+              ...nds,
+              {
+                id,
+                type: "imageCard",
+                position,
+                style: { width: defaultWidth, height: defaultHeight },
+                data: {
+                  label: file.name,
+                  previewUrl: compressedDataUrl,
+                  width: defaultWidth,
+                  height: defaultHeight,
+                },
+              },
+            ]);
+          }
         };
-
-        addObject(newObject);
-
-        setNodes((nds) => [
-          ...nds,
-          {
-            id: newImageId,
-            type: "imageCard",
-            position: position,
-            style: { width: defaultWidth, height: defaultHeight },
-            data: { label: file.name, previewUrl: reader.result as string, width: defaultWidth, height: defaultHeight },
-          },
-        ]);
       };
       reader.readAsDataURL(file);
     });
