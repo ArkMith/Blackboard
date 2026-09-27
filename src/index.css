@@ -166,3 +166,24 @@ h1, h2, h3, h4, h5, h6,
   transform: scale(1.25);
   background-color: var(--color-accent) !important;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Android canvas interaction                                                 */
+/* -------------------------------------------------------------------------- */
+
+.blackboard-android .react-flow__node.selected {
+  outline: 2px solid var(--color-accent) !important;
+  outline-offset: 5px;
+}
+
+.blackboard-android .react-flow__node {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.blackboard-android .scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.blackboard-android .scrollbar-none {
+  scrollbar-width: none;
+}

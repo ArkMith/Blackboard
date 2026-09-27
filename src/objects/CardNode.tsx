@@ -16,6 +16,7 @@ export default function CardNode({ id, data, selected }: any) {
 
   const width = currentObject?.width ?? data.width ?? 320;
   const height = currentObject?.height ?? data.height ?? 180;
+  const isAndroid = /Android/i.test(navigator.userAgent);
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingContent, setEditingContent] = useState(false);
@@ -114,7 +115,14 @@ export default function CardNode({ id, data, selected }: any) {
             />
           ) : (
             <h3
+              data-text-editable="true"
               onDoubleClick={() => setEditingTitle(true)}
+              onPointerUp={(e) => {
+                if (isAndroid) {
+                  e.stopPropagation();
+                  setEditingTitle(true);
+                }
+              }}
               className="cursor-text text-xs font-bold rounded px-1 py-0.5 transition-colors border border-transparent whitespace-pre-wrap break-words leading-tight"
               style={{ color: "var(--color-text)" }}
             >
@@ -138,7 +146,14 @@ export default function CardNode({ id, data, selected }: any) {
             />
           ) : (
             <div
+              data-text-editable="true"
               onDoubleClick={() => setEditingContent(true)}
+              onPointerUp={(e) => {
+                if (isAndroid) {
+                  e.stopPropagation();
+                  setEditingContent(true);
+                }
+              }}
               className="min-h-[80px] cursor-text whitespace-pre-wrap rounded border border-transparent p-2 text-[11px] font-medium leading-relaxed transition-colors"
               style={
                 content

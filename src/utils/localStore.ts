@@ -1,19 +1,13 @@
 import { isTauri } from "@tauri-apps/api/core";
-import {
-  BaseDirectory,
-  readTextFile,
-  writeTextFile,
-  exists,
-  mkdir,
-} from "@tauri-apps/plugin-fs";
+import { load as loadTauriStore, type Store } from "@tauri-apps/plugin-store";
 
-// Name of the JSON store file in OS AppData directory
+// Persistent key/value storage shared by the whole frontend.
+// The previous implementation read and rewrote the entire JSON file for every
+// save. On Android that was unnecessarily expensive and overlapping saves could
+// overwrite each other. Tauri's Store plugin is supported on Android and keeps
+// the same key/value model we already use.
 const DATA_FILE_NAME = "blackboard-data.json";
 const APP_SETTINGS_KEY = "app-settings";
-
-interface StoreSchema {
-  [key: string]: unknown;
-}
 
 export interface AppSettings {
   brushColor: string;
@@ -46,11 +40,29 @@ function normalizeAppSettings(settings: Partial<AppSettings> | null | undefined)
     ? settings.recentColors.filter((color): color is string => typeof color === "string" && color.trim().length > 0)
     : DEFAULT_APP_SETTINGS.recentColors;
 
-  return {
-    ...DEFAULT_APP_SETTINGS,
-    ...settings,
-    recentColors,
-  };
+  return { ...DEFAULT_APP_SETTINGS, ...settings, recentColors };
+}
+
+let storePromise: Promise<Store> | null = null;
+let writeQueue: Promise<void> = Promise.resolve();
+
+async function getStore(): Promise<Store> {
+  if (!isTauri()) {
+    throw new Error("Tauri store requested outside Tauri runtime");
+  }
+
+  if (!storePromise) {
+    storePromise = loadTauriStore(DATA_FILE_NAME, { autoSave: false });
+  }
+
+  return storePromise;
+}
+
+// All writes share one queue so rapid canvas changes cannot race one another.
+function enqueueWrite(operation: () => Promise<void>): Promise<void> {
+  const next = writeQueue.then(operation, operation);
+  writeQueue = next.catch(() => undefined);
+  return next;
 }
 
 export async function loadAppSettings(): Promise<AppSettings> {
@@ -59,88 +71,48 @@ export async function loadAppSettings(): Promise<AppSettings> {
 }
 
 export async function saveAppSettings(next: Partial<AppSettings>): Promise<AppSettings> {
-  const merged = normalizeAppSettings({
-    ...(await loadAppSettings()),
-    ...next,
-  });
-
+  const merged = normalizeAppSettings({ ...(await loadAppSettings()), ...next });
   await localSet(APP_SETTINGS_KEY, merged);
   return merged;
 }
 
-/**
- * Reads the master JSON file from OS AppData (e.g., AppData/Roaming/<App>/blackboard-data.json)
- */
-async function readDiskStore(): Promise<StoreSchema> {
-  try {
-    const fileExists = await exists(DATA_FILE_NAME, {
-      baseDir: BaseDirectory.AppData,
-    });
-
-    if (!fileExists) {
-      return {};
-    }
-
-    const raw = await readTextFile(DATA_FILE_NAME, {
-      baseDir: BaseDirectory.AppData,
-    });
-    return JSON.parse(raw) as StoreSchema;
-  } catch (err) {
-    console.warn("[localStore] Failed to read from AppData disk store:", err);
-    return {};
-  }
-}
-
-/**
- * Writes the master JSON payload to disk in OS AppData
- */
-async function writeDiskStore(data: StoreSchema): Promise<void> {
-  try {
-    // Ensure the AppData folder for this app exists
-    await mkdir("", {
-      baseDir: BaseDirectory.AppData,
-      recursive: true,
-    });
-
-    await writeTextFile(DATA_FILE_NAME, JSON.stringify(data, null, 2), {
-      baseDir: BaseDirectory.AppData,
-    });
-  } catch (err) {
-    console.error("[localStore] Failed to write to AppData disk store:", err);
-  }
-}
-
 export async function localGet<T>(key: string): Promise<T | null> {
   if (isTauri()) {
-    const store = await readDiskStore();
-    return (store[key] as T) ?? null;
+    const store = await getStore();
+    return (await store.get<T>(key)) ?? null;
   }
 
-  // Fallback for web browser dev preview
   const raw = localStorage.getItem(key);
   return raw ? (JSON.parse(raw) as T) : null;
 }
 
 export async function localSet<T>(key: string, value: T): Promise<void> {
   if (isTauri()) {
-    const store = await readDiskStore();
-    store[key] = value;
-    await writeDiskStore(store);
+    await enqueueWrite(async () => {
+      const store = await getStore();
+      await store.set(key, value);
+      await store.save();
+    });
     return;
   }
 
-  // Fallback for web browser dev preview
   localStorage.setItem(key, JSON.stringify(value));
 }
 
 export async function localDelete(key: string): Promise<void> {
   if (isTauri()) {
-    const store = await readDiskStore();
-    delete store[key];
-    await writeDiskStore(store);
+    await enqueueWrite(async () => {
+      const store = await getStore();
+      await store.delete(key);
+      await store.save();
+    });
     return;
   }
 
-  // Fallback for web browser dev preview
   localStorage.removeItem(key);
+}
+
+/** Wait for queued Tauri store writes to reach disk. */
+export async function flushLocalStore(): Promise<void> {
+  await writeQueue;
 }

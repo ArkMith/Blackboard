@@ -1,6 +1,6 @@
 [package]
 name = "Blackboard"
-version = "1.0.0"
+version = "1.1.0"
 description = "Creative Management App"
 authors = ["ArkMith"]
 license = "GPL v3.0"
@@ -27,6 +27,7 @@ tauri-plugin-log = "2"
 tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+tauri-plugin-deep-link = "2.4.10"
 
 # Only supports desktop's multi-process launch model; not needed/available on
 # Android or iOS, which use RunEvent::Opened exclusively for file handling.

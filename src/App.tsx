@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import DashboardMainMenu from "./components/DashboardMainMenu";
-import Workspace from "./canvas/Workspace";
+const Workspace = lazy(() => import("./canvas/Workspace"));
 import PdfOpenDialog from "./components/PdfOpenDialog";
 import { ReactFlowProvider } from "reactflow";
 import { Window } from "@tauri-apps/api/window";
 import { useWorkspaceStore } from "./stores/workspaceStore";
-import { renderPdfPages, buildPdfPageObjects } from "./utils/pdf";
 import { readPdfSource } from "./utils/pdfOpen";
 
 interface PendingPdfOpen {
@@ -48,17 +47,22 @@ export default function App() {
         const { isTauri, invoke } = await import("@tauri-apps/api/core");
         if (!isTauri()) return;
 
+        const { listen } = await import("@tauri-apps/api/event");
+
+        // Attach the listener BEFORE draining startup files. This avoids a
+        // startup race where Rust receives the PDF and emits the event while
+        // the React app is still mounting.
+        unlisten = await listen<string[]>("blackboard-file-opened", (event) => {
+          addPending(event.payload ?? []);
+        });
+
+        // Drain files that arrived before the frontend was ready.
         try {
           const opened = await invoke<string[]>("get_opened_files");
           addPending(opened ?? []);
         } catch (err) {
           console.error("[App] get_opened_files failed:", err);
         }
-
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<string[]>("blackboard-file-opened", (event) => {
-          addPending(event.payload ?? []);
-        });
       } catch (err) {
         console.error("[App] Failed to attach PDF open-with listener:", err);
       }
@@ -84,6 +88,7 @@ export default function App() {
       for (const path of pendingPdfOpen.paths) {
         const fileName = fileNameFromPath(path);
         const bytes = await readPdfSource({ fileName, path });
+        const { renderPdfPages, buildPdfPageObjects } = await import("./utils/pdf");
         const result = await renderPdfPages(bytes, { fileName, sourceFilePath: path });
         const pageObjects = buildPdfPageObjects(result, useWorkspaceStore.getState().objects);
         pageObjects.forEach((object) => useWorkspaceStore.getState().addObject(object));
@@ -138,7 +143,15 @@ export default function App() {
     <>
       {inWorkspace ? (
         <ReactFlowProvider>
-          <Workspace onBackToMenu={() => setInWorkspace(false)} />
+          <Suspense
+            fallback={
+              <div className="h-full w-full flex items-center justify-center bg-app-bg text-app-muted text-sm">
+                Loading workspace…
+              </div>
+            }
+          >
+            <Workspace onBackToMenu={() => setInWorkspace(false)} />
+          </Suspense>
         </ReactFlowProvider>
       ) : (
         <DashboardMainMenu onEnterWorkspace={() => setInWorkspace(true)} />

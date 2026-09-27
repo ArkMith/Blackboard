@@ -12,6 +12,7 @@ export default function CompactNode({ id, data, selected }: any) {
   // Width is user-adjustable; height stays content-driven (auto) since this is a
   // short freeform note -- see EdgeResizeHandle usage below.
   const width = currentObject?.width ?? data.width ?? 200;
+  const isAndroid = /Android/i.test(navigator.userAgent);
 
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(data.label || "");
@@ -87,7 +88,14 @@ export default function CompactNode({ id, data, selected }: any) {
           />
         ) : (
           <div
+            data-text-editable="true"
             onDoubleClick={() => setEditing(true)}
+            onPointerUp={(e) => {
+              if (isAndroid) {
+                e.stopPropagation();
+                setEditing(true);
+              }
+            }}
             className="cursor-text font-bold whitespace-pre-wrap break-words leading-tight"
             style={{ color: "var(--color-text)" }}
             title="Double-click to write label quick note"

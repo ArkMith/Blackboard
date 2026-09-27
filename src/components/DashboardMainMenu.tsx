@@ -37,6 +37,10 @@ export default function DashboardMainMenu({
   const [newBoardName, setNewBoardName] = useState("");
   const [importing, setImporting] = useState(false);
 
+  const isAndroid =
+    typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+  const [isAndroidMenuOpen, setIsAndroidMenuOpen] = useState(false);
+
   // Default follows the system preference until saved settings load in.
   const prefersDark =
     typeof window !== "undefined" &&
@@ -125,18 +129,135 @@ export default function DashboardMainMenu({
       onClick={() => {
         setIsProfileMenuOpen(false);
         setActiveCardMenuId(null);
+        setIsAndroidMenuOpen(false);
       }}
       className={`min-h-screen w-full font-body flex flex-col antialiased select-none transition-colors duration-200 ${
         isDarkMode ? "bg-[#0f0d0b] text-[#f4e8dc]" : "bg-[#fcfaf7] text-[#2a2421]"
       }`}
     >
-      {/* Top Header Bar */}
+      {/* Android-only dashboard header */}
+      {isAndroid && (
+        <header
+          className="absolute top-0 left-0 right-0 z-50 h-14 flex items-center gap-1 px-2 border-b shadow-lg backdrop-blur-xl"
+            style={{
+              background: isDarkMode ? "rgba(20,16,13,0.96)" : "rgba(255,255,255,0.96)",
+              borderColor: isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+              paddingTop: "env(safe-area-inset-top)",
+              height: "calc(3.5rem + env(safe-area-inset-top))",
+            }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <img src={blackboardLogo} alt="Blackboard" className="w-8 h-8 rounded-lg shrink-0" />
+            <div className="min-w-0">
+              <div className="font-display text-sm font-bold truncate">Blackboard</div>
+              <div className={`text-[9px] font-mono ${isDarkMode ? "text-white/40" : "text-black/40"}`}>
+                v{APP_VERSION}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setIsCreateModalOpen(true)}
+              className="w-10 h-10 rounded-xl bg-[#d46a43] text-white flex items-center justify-center active:scale-95"
+              aria-label="New Blackboard"
+            >
+              <Plus size={21} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsAndroidMenuOpen((open) => !open)}
+              className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                isDarkMode ? "text-white/80 hover:bg-white/10" : "text-black/70 hover:bg-black/5"
+              }`}
+              aria-label="Dashboard menu"
+            >
+              <MoreHorizontal size={22} />
+            </button>
+          </div>
+
+          {isAndroidMenuOpen && (
+            <div
+              className={`absolute right-3 top-[calc(100%+6px)] w-64 rounded-2xl border shadow-2xl p-2 ${
+                isDarkMode
+                  ? "bg-[#1a1410] border-white/10 text-[#f4e8dc]"
+                  : "bg-white border-black/10 text-[#2a2421]"
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsAndroidMenuOpen(false);
+                  await handleImport();
+                }}
+                disabled={importing}
+                className="w-full text-left px-3 py-3 rounded-xl flex items-center gap-3 text-sm disabled:opacity-50"
+              >
+                <Upload size={17} />
+                <span>{importing ? "Importing..." : `Import .${ARK_EXTENSION}`}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDarkMode((value) => !value);
+                  setIsAndroidMenuOpen(false);
+                }}
+                className="w-full text-left px-3 py-3 rounded-xl flex items-center gap-3 text-sm"
+              >
+                {isDarkMode ? <Moon size={17} /> : <Sun size={17} />}
+                <span>{isDarkMode ? "Light Theme" : "Dark Theme"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMiniMap((value) => !value);
+                  setIsAndroidMenuOpen(false);
+                }}
+                className="w-full text-left px-3 py-3 rounded-xl flex items-center justify-between text-sm"
+              >
+                <span className="flex items-center gap-3"><Map size={17} />MiniMap</span>
+                <span className="text-[10px] opacity-50">{showMiniMap ? "ON" : "OFF"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBg((value) => !value);
+                  setIsAndroidMenuOpen(false);
+                }}
+                className="w-full text-left px-3 py-3 rounded-xl flex items-center justify-between text-sm"
+              >
+                <span className="flex items-center gap-3"><Grid size={17} />Grid Background</span>
+                <span className="text-[10px] opacity-50">{showBg ? "ON" : "OFF"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAndroidMenuOpen(false);
+                  alert(`Blackboard Workspace Engine v${APP_VERSION}, by Ark Mith. All changes are saved locally.`);
+                }}
+                className="w-full text-left px-3 py-3 rounded-xl flex items-center gap-3 text-sm"
+              >
+                <HelpCircle size={17} />
+                About Blackboard
+              </button>
+            </div>
+          )}
+        </header>
+      )}
+
+      {/* Windows-only dashboard header */}
       <header
-        className={`h-16 px-6 flex items-center justify-between border-b transition-colors ${
+        className={`${isAndroid ? "hidden" : ""} h-16 px-6 flex items-center justify-between border-b transition-colors ${
           isDarkMode ? "border-white/10 bg-[#1a1410]/60" : "border-black/10 bg-white/60"
         }`}
-      >
-        <div className="flex items-center gap-2.5">
+      >        <div className="flex items-center gap-2.5">
           <img src={blackboardLogo} alt="Blackboard" className="w-8 h-8 rounded-lg" />
           <div className="font-display text-base font-bold tracking-tight flex items-baseline gap-1.5">
             <span>Blackboard</span>
@@ -286,14 +407,17 @@ export default function DashboardMainMenu({
       </header>
 
       {/* Main Board Grid */}
-      <main className="flex-1 p-8 max-w-[1700px] w-full mx-auto relative">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-5 relative z-10">
+      <main className={`flex-1 w-full mx-auto relative ${isAndroid ? "p-3 pb-6 pt-[calc(3.5rem+env(safe-area-inset-top)+0.75rem)]" : "p-8 max-w-[1700px]"}`}>
+        <div className={`grid relative z-10 ${
+          isAndroid
+            ? "grid-cols-2 gap-3"
+            : "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-5"
+        }`}>
 
           {/* New Blackboard Button Tile */}
           <button
             onClick={() => setIsCreateModalOpen(true)}
-            className="group relative aspect-[16/10] bg-[#d46a43] hover:bg-[#c15c37] text-white rounded-2xl shadow-xs hover:shadow-md transition-all flex flex-col items-center justify-center gap-3 p-4 cursor-pointer overflow-hidden active:scale-[0.98]"
-          >
+            className={`group relative ${isAndroid ? "aspect-square" : "aspect-[16/10]"} bg-[#d46a43] hover:bg-[#c15c37] text-white rounded-2xl shadow-xs hover:shadow-md transition-all flex flex-col items-center justify-center gap-3 p-4 cursor-pointer overflow-hidden active:scale-[0.98]"`}>
             <div className="w-12 h-12 rounded-full bg-white/20 group-hover:bg-white/30 flex items-center justify-center transition-colors">
               <Plus size={28} strokeWidth={2.5} className="text-white" />
             </div>
@@ -308,7 +432,7 @@ export default function DashboardMainMenu({
               <div
                 key={ws.id}
                 onClick={() => handleSelectWorkspace(ws.id)}
-                className={`group relative aspect-[16/10] rounded-2xl shadow-xs hover:shadow-md transition-all border flex flex-col overflow-hidden cursor-pointer ${
+                className={`group relative ${isAndroid ? "aspect-square" : "aspect-[16/10]"} rounded-2xl shadow-xs hover:shadow-md transition-all border flex flex-col overflow-hidden cursor-pointer ${
                   isDarkMode
                     ? "bg-[#1a1410] border-white/10 hover:border-white/20"
                     : "bg-white border-black/10 hover:border-black/20"
@@ -328,7 +452,7 @@ export default function DashboardMainMenu({
 
                 {/* Card Footer */}
                 <div
-                  className={`h-14 px-3.5 flex items-center justify-between border-t ${
+                  className={`${isAndroid ? "h-12 px-2.5" : "h-14 px-3.5"} flex items-center justify-between border-t ${
                     isDarkMode ? "bg-[#1a1410] border-white/10" : "bg-white border-black/5"
                   }`}
                 >

@@ -2,7 +2,6 @@ import React, {
   useEffect,
   useLayoutEffect,
   useRef,
-  useState,
 } from "react";
 import type { ReactFlowInstance } from "reactflow";
 import { useOnViewportChange } from "reactflow";
@@ -23,6 +22,8 @@ interface DrawingCanvasProps {
 
 type StrokePoint = [number, number, number];
 
+const MAX_RENDER_POINTS = 700;
+
 export default function DrawingCanvas({
   isDrawingMode,
   isEraserMode,
@@ -33,205 +34,97 @@ export default function DrawingCanvas({
   reactFlowInstance,
 }: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
   const livePointsRef = useRef<StrokePoint[]>([]);
-  const lastPointRef = useRef<StrokePoint | null>(null);
+  const isDrawingRef = useRef(false);
+  const renderFrameRef = useRef<number | null>(null);
+  const renderCanvasRef = useRef<() => void>(() => {});
 
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [livePoints, setLivePoints] = useState<StrokePoint[]>([]);
+  const drawings = useWorkspaceStore((state) => state.drawings);
+  const setDrawings = useWorkspaceStore((state) => state.setDrawings);
 
-  const drawings = useWorkspaceStore(
-    (state) => state.drawings
-  );
-
-  const setDrawings = useWorkspaceStore(
-    (state) => state.setDrawings
-  );
+  const getViewport = () =>
+    reactFlowInstance?.getViewport() ?? { x: 0, y: 0, zoom: 1 };
 
   /*
-   * ------------------------------------------------------------
-   * Canvas sizing
-   * ------------------------------------------------------------
+   * Drawing used to put the complete live stroke into React state on every
+   * pointer event. That forced React + perfect-freehand to recalculate the
+   * entire stroke as fast as the browser could deliver pointer events.
+   *
+   * On Android this can easily outrun the WebView. Live points now stay in a
+   * ref and rendering is coalesced to one requestAnimationFrame at a time.
    */
+  const scheduleRender = () => {
+    if (renderFrameRef.current !== null) return;
+
+    renderFrameRef.current = window.requestAnimationFrame(() => {
+      renderFrameRef.current = null;
+      renderCanvasRef.current();
+    });
+  };
 
   const resizeCanvas = () => {
     const canvas = canvasRef.current;
+    const parent = canvas?.parentElement;
+    if (!canvas || !parent) return;
 
-    if (!canvas || !canvas.parentElement) {
-      return;
-    }
+    const rect = parent.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
 
-    const rect =
-      canvas.parentElement.getBoundingClientRect();
-
-    const width = Math.max(
-      1,
-      Math.round(rect.width)
+    // Phones do not benefit from pushing an enormous backing canvas through
+    // the WebView GPU. Desktop keeps the normal device resolution; Android is
+    // capped at 1.75x while still looking sharp on high-density screens.
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const devicePixelRatio = Math.min(
+      window.devicePixelRatio || 1,
+      isAndroid ? 1.75 : 2
     );
 
-    const height = Math.max(
-      1,
-      Math.round(rect.height)
-    );
-
-    const devicePixelRatio =
-      window.devicePixelRatio || 1;
-
-    /*
-     * Render at device resolution.
-     *
-     * This is particularly important on phones.
-     */
-    canvas.width =
-      Math.round(width * devicePixelRatio);
-
-    canvas.height =
-      Math.round(height * devicePixelRatio);
-
+    canvas.width = Math.round(width * devicePixelRatio);
+    canvas.height = Math.round(height * devicePixelRatio);
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
 
-    renderCanvas();
+    scheduleRender();
   };
 
   useLayoutEffect(() => {
     resizeCanvas();
 
-    const observer = new ResizeObserver(() => {
-      resizeCanvas();
-    });
-
+    const observer = new ResizeObserver(resizeCanvas);
     if (canvasRef.current?.parentElement) {
-      observer.observe(
-        canvasRef.current.parentElement
-      );
+      observer.observe(canvasRef.current.parentElement);
     }
 
-    window.addEventListener(
-      "resize",
-      resizeCanvas
-    );
+    window.addEventListener("resize", resizeCanvas);
 
     return () => {
       observer.disconnect();
+      window.removeEventListener("resize", resizeCanvas);
 
-      window.removeEventListener(
-        "resize",
-        resizeCanvas
-      );
+      if (renderFrameRef.current !== null) {
+        window.cancelAnimationFrame(renderFrameRef.current);
+        renderFrameRef.current = null;
+      }
     };
   }, []);
 
-  /*
-   * ------------------------------------------------------------
-   * ReactFlow viewport
-   * ------------------------------------------------------------
-   */
-
-  const getViewport = () => {
-    if (!reactFlowInstance) {
-      return {
-        x: 0,
-        y: 0,
-        zoom: 1,
-      };
-    }
-
-    return reactFlowInstance.getViewport();
-  };
-
-  /*
-   * IMPORTANT FIX ("stuck to the screen"):
-   *
-   * renderCanvas() applies the ReactFlow viewport transform, so
-   * strokes ARE stored in world coordinates. But the previous code
-   * only repainted on drawing/style state changes. `reactFlowInstance`
-   * is a stable object reference, so panning/zooming the board never
-   * triggered a repaint — strokes stayed glued to their last-painted
-   * screen position until the next draw action forced a redraw.
-   *
-   * useOnViewportChange fires on every pan/zoom tick and always sees
-   * the latest callback, so we just force a repaint here.
-   */
   useOnViewportChange({
     onChange: () => {
-      renderCanvas();
+      scheduleRender();
     },
   });
 
-  /*
-   * ------------------------------------------------------------
-   * Pointer -> ReactFlow world coordinates
-   * ------------------------------------------------------------
-   */
-
-  const eventToFlowPoint = (
-    event: React.PointerEvent
-  ): StrokePoint => {
-    if (!reactFlowInstance) {
-      return [
-        event.clientX,
-        event.clientY,
-        event.pressure || 0.5,
-      ];
-    }
-
-    const position =
-      reactFlowInstance.screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
-      });
-
-    const pressure =
-      event.pressure > 0
-        ? event.pressure
-        : 0.5;
-
-    return [
-      position.x,
-      position.y,
-      pressure,
-    ];
-  };
-
-  /*
-   * ------------------------------------------------------------
-   * Pointer sampling
-   *
-   * Modern browsers provide getCoalescedEvents().
-   *
-   * This is very important for drawing.
-   *
-   * Instead of receiving:
-   *
-   *     A -------- B -------- C
-   *
-   * we may receive all the hidden points:
-   *
-   *     A -- a -- b -- c -- B -- d -- e -- C
-   *
-   * That prevents large brushes from turning into
-   * giant polygon blocks.
-   * ------------------------------------------------------------
-   */
-
   const collectPointerPoints = (
-    event: React.PointerEvent
+    event: React.PointerEvent<HTMLCanvasElement>
   ): StrokePoint[] => {
-    const nativeEvent =
-      event.nativeEvent as PointerEvent;
-
+    const nativeEvent = event.nativeEvent as PointerEvent;
     const coalesced =
-      typeof nativeEvent.getCoalescedEvents ===
-      "function"
+      typeof nativeEvent.getCoalescedEvents === "function"
         ? nativeEvent.getCoalescedEvents()
         : [];
 
-    const events =
-      coalesced.length > 0
-        ? coalesced
-        : [nativeEvent];
-
+    const events = coalesced.length > 0 ? coalesced : [nativeEvent];
     const result: StrokePoint[] = [];
 
     for (const pointerEvent of events) {
@@ -239,87 +132,42 @@ export default function DrawingCanvas({
         result.push([
           pointerEvent.clientX,
           pointerEvent.clientY,
-          pointerEvent.pressure || 0.5,
+          pointerEvent.pressure > 0 ? pointerEvent.pressure : 0.5,
         ]);
-
         continue;
       }
 
-      const position =
-        reactFlowInstance.screenToFlowPosition({
-          x: pointerEvent.clientX,
-          y: pointerEvent.clientY,
-        });
+      const position = reactFlowInstance.screenToFlowPosition({
+        x: pointerEvent.clientX,
+        y: pointerEvent.clientY,
+      });
 
       result.push([
         position.x,
         position.y,
-        pointerEvent.pressure > 0
-          ? pointerEvent.pressure
-          : 0.5,
+        pointerEvent.pressure > 0 ? pointerEvent.pressure : 0.5,
       ]);
     }
 
     return result;
   };
 
-  /*
-   * ------------------------------------------------------------
-   * Distance helper
-   * ------------------------------------------------------------
-   */
-
-  const distanceBetween = (
-    a: StrokePoint,
-    b: StrokePoint
-  ) => {
-    const dx = a[0] - b[0];
-    const dy = a[1] - b[1];
-
-    return Math.sqrt(
-      dx * dx + dy * dy
-    );
-  };
-
-  /*
-   * ------------------------------------------------------------
-   * Point interpolation
-   *
-   * IMPORTANT FIX (zigzag / jagged outline at large brush sizes):
-   *
-   * perfect-freehand builds the stroke outline by offsetting each
-   * INPUT point perpendicular to the local stroke direction, by
-   * roughly `size / 2`. If two consecutive input points are farther
-   * apart than the brush radius (very easy with a fast mouse drag
-   * + a large brush), the perpendicular offsets on either side of
-   * the gap cross each other, and the outline self-intersects —
-   * this is exactly the sawtooth/zigzag pattern in the screenshot.
-   *
-   * No amount of smoothing the OUTPUT curve fixes this, because the
-   * bad geometry is already baked into the input polyline. The fix
-   * is to guarantee the input points are dense enough relative to
-   * the current brush size, by linearly interpolating extra points
-   * into any gap that's too wide.
-   * ------------------------------------------------------------
-   */
+  const distanceBetween = (a: StrokePoint, b: StrokePoint) =>
+    Math.hypot(a[0] - b[0], a[1] - b[1]);
 
   const interpolatePoints = (
     from: StrokePoint,
     to: StrokePoint,
     maxStep: number
   ): StrokePoint[] => {
-    const dist = distanceBetween(from, to);
+    const distance = distanceBetween(from, to);
+    if (distance <= maxStep) return [to];
 
-    if (dist <= maxStep) {
-      return [to];
-    }
-
-    const steps = Math.ceil(dist / maxStep);
+    const steps = Math.ceil(distance / maxStep);
     const result: StrokePoint[] = [];
 
-    for (let i = 1; i <= steps; i++) {
+    for (let i = 1; i <= steps; i += 1) {
       const t = i / steps;
-
       result.push([
         from[0] + (to[0] - from[0]) * t,
         from[1] + (to[1] - from[1]) * t,
@@ -330,59 +178,28 @@ export default function DrawingCanvas({
     return result;
   };
 
-  const getActiveSize = () =>
-    isEraserMode ? eraserSize : brushSize;
+  const getActiveSize = () => (isEraserMode ? eraserSize : brushSize);
 
-  /*
-   * ------------------------------------------------------------
-   * Add pointer samples
-   * ------------------------------------------------------------
-   */
+  const appendPointerPoints = (incoming: StrokePoint[]) => {
+    if (incoming.length === 0) return;
 
-  const appendPointerPoints = (
-    incoming: StrokePoint[]
-  ) => {
-    if (incoming.length === 0) {
-      return;
-    }
+    const current = livePointsRef.current;
 
-    const current =
-      livePointsRef.current;
-
-    /*
-     * Cap the max gap between input points at a fraction of the
-     * current brush size, so perfect-freehand's perpendicular
-     * offsets never have room to cross over and self-intersect.
-     */
+    // The old size / 3 rule could create thousands of interpolated points
+    // on a fast finger stroke. A bounded step is enough for perfect-freehand
+    // to remain smooth without overwhelming the Android WebView.
     const activeSize = getActiveSize();
-    const maxStep = Math.max(1, activeSize / 3);
+    const maxStep = Math.max(2, Math.min(12, activeSize / 2));
 
     for (const point of incoming) {
-      const previous =
-        current[current.length - 1];
+      const previous = current[current.length - 1];
 
       if (previous) {
-        const dist = distanceBetween(previous, point);
+        const distance = distanceBetween(previous, point);
+        if (distance < 0.5) continue;
 
-        /*
-         * Ignore microscopic duplicate samples.
-         *
-         * This prevents thousands of identical points when
-         * a finger/stylus pauses.
-         */
-        if (dist < 0.15) {
-          continue;
-        }
-
-        if (dist > maxStep) {
-          const interpolated = interpolatePoints(
-            previous,
-            point,
-            maxStep
-          );
-
-          current.push(...interpolated);
-
+        if (distance > maxStep) {
+          current.push(...interpolatePoints(previous, point, maxStep));
           continue;
         }
       }
@@ -390,130 +207,72 @@ export default function DrawingCanvas({
       current.push(point);
     }
 
-    lastPointRef.current =
-      current[current.length - 1] ?? null;
-
-    setLivePoints([...current]);
+    scheduleRender();
   };
 
-  /*
-   * ------------------------------------------------------------
-   * Stroke renderer
-   * ------------------------------------------------------------
-   */
+  const getRenderablePoints = (points: StrokePoint[]) => {
+    if (points.length <= MAX_RENDER_POINTS) return points;
+
+    const stride = Math.ceil(points.length / MAX_RENDER_POINTS);
+    const result: StrokePoint[] = [];
+
+    for (let i = 0; i < points.length; i += stride) {
+      result.push(points[i]);
+    }
+
+    const last = points[points.length - 1];
+    if (result[result.length - 1] !== last) {
+      result.push(last);
+    }
+
+    return result;
+  };
 
   const drawStroke = (
     ctx: CanvasRenderingContext2D,
     points: StrokePoint[],
     size: number,
-    color: string,
-    zoom: number
+    color: string
   ) => {
-    if (points.length === 0) {
-      return;
-    }
+    if (points.length === 0) return;
 
-    /*
-     * perfect-freehand's size is in WORLD SPACE.
-     *
-     * Therefore the brush naturally scales with the board.
-     */
-    const safeSize = Math.max(
-      1,
-      size
-    );
+    const safeSize = Math.max(1, size);
+    const renderPoints = getRenderablePoints(points);
 
-    /*
-     * Scale smoothing/streamline up gradually for larger brushes.
-     * Bigger brushes make any residual waviness far more visible,
-     * so they benefit from more aggressive curve fitting.
-     */
-    const smoothing = Math.min(0.85, 0.55 + safeSize / 250);
-    const streamline = Math.min(0.6, 0.3 + safeSize / 300);
+    let strokePoints = renderPoints;
 
-    /*
-     * For a single point, make a tiny stroke with a
-     * duplicated point so the brush produces a proper dot.
-     */
-    let strokePoints = points;
-
-    if (points.length === 1) {
-      const [x, y, pressure] =
-        points[0];
-
+    if (renderPoints.length === 1) {
+      const [x, y, pressure] = renderPoints[0];
       strokePoints = [
         [x, y, pressure],
         [x + 0.01, y + 0.01, pressure],
       ];
     }
 
-    const outline = getStroke(
-      strokePoints,
-      {
-        size: safeSize,
-
-        /*
-         * Keep width stable.
-         *
-         * Pressure can still be supplied by a stylus,
-         * but ordinary fingers/mouse use a stable brush.
-         */
-        thinning: 0.15,
-
-        smoothing,
-        streamline,
-
+    const outline = getStroke(strokePoints, {
+      size: safeSize,
+      thinning: 0.15,
+      smoothing: Math.min(0.85, 0.55 + safeSize / 250),
+      streamline: Math.min(0.6, 0.3 + safeSize / 300),
+      easing: (t: number) => t,
+      simulatePressure: false,
+      start: {
+        cap: true,
+        taper: 0,
         easing: (t: number) => t,
+      },
+      end: {
+        cap: true,
+        taper: 0,
+        easing: (t: number) => t,
+      },
+      last: true,
+    });
 
-        simulatePressure: false,
-
-        /*
-         * Explicit round ends.
-         */
-        start: {
-          cap: true,
-          taper: 0,
-          easing: (t: number) => t,
-        },
-
-        end: {
-          cap: true,
-          taper: 0,
-          easing: (t: number) => t,
-        },
-
-        /*
-         * Tell perfect-freehand this is the final/live
-         * stroke rather than an endlessly continuing one.
-         */
-        last: true,
-      }
-    );
-
-    if (!outline || outline.length < 2) {
-      return;
-    }
-
-    /*
-     * IMPORTANT:
-     *
-     * The ReactFlow viewport transform is already applied
-     * to the canvas context by renderCanvas().
-     *
-     * Therefore these coordinates remain WORLD coordinates.
-     */
+    if (!outline || outline.length < 2) return;
 
     ctx.beginPath();
 
-    /*
-     * Draw the outline as a smooth curve through the MIDPOINTS of
-     * consecutive outline vertices, rather than straight lineTo()
-     * calls to each vertex. getStroke() returns a polygon, and
-     * connecting its vertices directly makes every polygon facet
-     * visible as a "corner" — invisible at small sizes, obviously
-     * jagged at large ones. Routing a quadratic curve through each
-     * vertex toward the next midpoint smooths the facets out.
-     */
     const firstPoint = outline[0];
     const lastPoint = outline[outline.length - 1];
 
@@ -522,10 +281,9 @@ export default function DrawingCanvas({
       (firstPoint[1] + lastPoint[1]) / 2
     );
 
-    for (let i = 0; i < outline.length; i++) {
+    for (let i = 0; i < outline.length; i += 1) {
       const point = outline[i];
       const nextPoint = outline[(i + 1) % outline.length];
-
       const midX = (point[0] + nextPoint[0]) / 2;
       const midY = (point[1] + nextPoint[1]) / 2;
 
@@ -533,183 +291,107 @@ export default function DrawingCanvas({
     }
 
     ctx.closePath();
-
     ctx.fillStyle = color;
-
     ctx.fill();
   };
 
-  /*
-   * ------------------------------------------------------------
-   * Render
-   * ------------------------------------------------------------
-   */
+  // Live strokes use the native canvas path renderer. This is deliberately
+  // cheaper than running perfect-freehand over the entire growing stroke on
+  // every animation frame. The committed stroke is still rendered with
+  // perfect-freehand, so the saved/final appearance stays the same.
+  const drawLiveStroke = (
+    ctx: CanvasRenderingContext2D,
+    points: StrokePoint[],
+    size: number,
+    color: string
+  ) => {
+    if (points.length === 0) return;
+
+    const renderPoints = getRenderablePoints(points);
+    const [firstX, firstY] = renderPoints[0];
+
+    ctx.beginPath();
+    ctx.moveTo(firstX, firstY);
+
+    for (let i = 1; i < renderPoints.length; i += 1) {
+      ctx.lineTo(renderPoints[i][0], renderPoints[i][1]);
+    }
+
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(1, size);
+    ctx.strokeStyle = color;
+    ctx.stroke();
+
+    // A single point should still feel like a brush tap.
+    if (renderPoints.length === 1) {
+      ctx.beginPath();
+      ctx.arc(firstX, firstY, Math.max(0.5, size / 2), 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+  };
 
   const renderCanvas = () => {
-    const canvas =
-      canvasRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    if (!canvas) {
-      return;
-    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-    const ctx =
-      canvas.getContext("2d");
-
-    if (!ctx) {
-      return;
-    }
-
-    const devicePixelRatio =
-      window.devicePixelRatio || 1;
-
-    const viewport =
-      getViewport();
-
-    /*
-     * Reset transform completely.
-     */
-    ctx.setTransform(
-      1,
-      0,
-      0,
-      1,
-      0,
-      0
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const devicePixelRatio = Math.min(
+      window.devicePixelRatio || 1,
+      isAndroid ? 1.75 : 2
     );
+    const viewport = getViewport();
 
-    ctx.clearRect(
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    /*
-     * Convert CSS pixels to device pixels.
-     */
-    ctx.scale(
-      devicePixelRatio,
-      devicePixelRatio
-    );
-
-    /*
-     * ReactFlow world -> screen transform.
-     */
-    ctx.translate(
-      viewport.x,
-      viewport.y
-    );
-
-    ctx.scale(
-      viewport.zoom,
-      viewport.zoom
-    );
-
-    /*
-     * Use normal compositing for all regular pen strokes.
-     */
-    ctx.globalCompositeOperation =
-      "source-over";
-
-    /*
-     * ----------------------------------------------------------
-     * Committed strokes
-     * ----------------------------------------------------------
-     */
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+    ctx.translate(viewport.x, viewport.y);
+    ctx.scale(viewport.zoom, viewport.zoom);
+    ctx.globalCompositeOperation = "source-over";
 
     for (const drawing of drawings) {
       if (drawing.type === "pen") {
-        drawStroke(
-          ctx,
-          drawing.points,
-          drawing.size,
-          drawing.color,
-          viewport.zoom
-        );
+        drawStroke(ctx, drawing.points, drawing.size, drawing.color);
       }
     }
-
-    /*
-     * ----------------------------------------------------------
-     * Eraser strokes
-     * ----------------------------------------------------------
-     */
 
     for (const drawing of drawings) {
       if (drawing.type === "eraser") {
-        ctx.globalCompositeOperation =
-          "destination-out";
-
-        drawStroke(
-          ctx,
-          drawing.points,
-          drawing.size,
-          "rgba(0,0,0,1)",
-          viewport.zoom
-        );
-
-        ctx.globalCompositeOperation =
-          "source-over";
+        ctx.globalCompositeOperation = "destination-out";
+        drawStroke(ctx, drawing.points, drawing.size, "rgba(0,0,0,1)");
+        ctx.globalCompositeOperation = "source-over";
       }
     }
 
-    /*
-     * ----------------------------------------------------------
-     * Live stroke
-     * ----------------------------------------------------------
-     */
+    const livePoints = livePointsRef.current;
 
-    if (
-      isDrawing &&
-      livePoints.length > 0
-    ) {
+    if (isDrawingRef.current && livePoints.length > 0) {
       if (isDrawingMode) {
-        ctx.globalCompositeOperation =
-          "source-over";
-
-        drawStroke(
-          ctx,
-          livePoints,
-          brushSize,
-          brushColor,
-          viewport.zoom
-        );
-      }
-
-      if (
-        isEraserMode &&
-        eraserType === "brush"
-      ) {
-        ctx.globalCompositeOperation =
-          "destination-out";
-
-        drawStroke(
-          ctx,
-          livePoints,
-          eraserSize,
-          "rgba(0,0,0,1)",
-          viewport.zoom
-        );
-
-        ctx.globalCompositeOperation =
-          "source-over";
+        ctx.globalCompositeOperation = "source-over";
+        drawLiveStroke(ctx, livePoints, brushSize, brushColor);
+      } else if (isEraserMode && eraserType === "brush") {
+        ctx.globalCompositeOperation = "destination-out";
+        drawLiveStroke(ctx, livePoints, eraserSize, "rgba(0,0,0,1)");
+        ctx.globalCompositeOperation = "source-over";
       }
     }
 
-    ctx.globalCompositeOperation =
-      "source-over";
+    ctx.globalCompositeOperation = "source-over";
   };
 
-  /*
-   * Re-render whenever drawing/viewport state changes.
-   */
+  renderCanvasRef.current = renderCanvas;
+
   useEffect(() => {
-    renderCanvas();
+    scheduleRender();
   }, [
     drawings,
-    livePoints,
-    isDrawing,
+    isDrawingMode,
+    isEraserMode,
     brushColor,
     brushSize,
     eraserSize,
@@ -717,301 +399,154 @@ export default function DrawingCanvas({
     reactFlowInstance,
   ]);
 
-  /*
-   * ------------------------------------------------------------
-   * Stroke eraser
-   * ------------------------------------------------------------
-   */
+  const eraseAtPoints = (points: StrokePoint[]) => {
+    if (points.length === 0) return;
 
-  const eraseAtPoint = (
-    point: StrokePoint
-  ) => {
-    const viewport =
-      getViewport();
+    const viewport = getViewport();
+    const radius = eraserSize / Math.max(viewport.zoom, 0.001);
 
-    const radius =
-      eraserSize /
-      Math.max(
-        viewport.zoom,
-        0.001
+    const currentDrawings = useWorkspaceStore.getState().drawings;
+
+    const filtered = currentDrawings.filter((drawing) => {
+      if (drawing.type === "eraser") return true;
+
+      return !drawing.points.some(([pointX, pointY]) =>
+        points.some(([x, y]) => Math.hypot(pointX - x, pointY - y) < radius)
       );
+    });
 
-    const [x, y] = point;
-
-    const filtered =
-      drawings.filter(
-        (drawing) => {
-          /*
-           * Never remove eraser records here.
-           */
-          if (
-            drawing.type === "eraser"
-          ) {
-            return true;
-          }
-
-          return !drawing.points.some(
-            ([pointX, pointY]) => {
-              const dx =
-                pointX - x;
-
-              const dy =
-                pointY - y;
-
-              return (
-                Math.sqrt(
-                  dx * dx +
-                    dy * dy
-                ) < radius
-              );
-            }
-          );
-        }
-      );
-
-    setDrawings(filtered);
+    if (filtered.length !== currentDrawings.length) {
+      setDrawings(filtered);
+    }
   };
-
-  /*
-   * ------------------------------------------------------------
-   * Pointer Down
-   * ------------------------------------------------------------
-   */
 
   const handlePointerDown = (
     event: React.PointerEvent<HTMLCanvasElement>
   ) => {
-    if (
-      !isDrawingMode &&
-      !isEraserMode
-    ) {
-      return;
-    }
+    if (!isDrawingMode && !isEraserMode) return;
 
-    /*
-     * Mouse:
-     * only primary button.
-     *
-     * Touch/stylus:
-     * always accepted.
-     */
-    if (
-      event.pointerType === "mouse" &&
-      event.button !== 0
-    ) {
-      return;
-    }
+    if (event.pointerType === "mouse" && event.button !== 0) return;
 
     event.preventDefault();
 
     try {
-      event.currentTarget.setPointerCapture(
-        event.pointerId
-      );
+      event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
       // Ignore unsupported pointer capture.
     }
 
-    setIsDrawing(true);
-
+    isDrawingRef.current = true;
     livePointsRef.current = [];
-    lastPointRef.current = null;
 
-    const points =
-      collectPointerPoints(event);
+    const points = collectPointerPoints(event);
 
-    if (
-      isEraserMode &&
-      eraserType === "stroke"
-    ) {
-      if (points.length > 0) {
-        eraseAtPoint(
-          points[points.length - 1]
-        );
-      }
-
+    if (isEraserMode && eraserType === "stroke") {
+      eraseAtPoints(points);
       return;
     }
 
     appendPointerPoints(points);
   };
-
-  /*
-   * ------------------------------------------------------------
-   * Pointer Move
-   * ------------------------------------------------------------
-   */
 
   const handlePointerMove = (
     event: React.PointerEvent<HTMLCanvasElement>
   ) => {
-    if (!isDrawing) {
-      return;
-    }
+    if (!isDrawingRef.current) return;
 
     event.preventDefault();
 
-    const points =
-      collectPointerPoints(event);
+    const points = collectPointerPoints(event);
 
-    if (
-      isEraserMode &&
-      eraserType === "stroke"
-    ) {
-      for (const point of points) {
-        eraseAtPoint(point);
-      }
-
+    if (isEraserMode && eraserType === "stroke") {
+      eraseAtPoints(points);
       return;
     }
 
     appendPointerPoints(points);
   };
 
-  /*
-   * ------------------------------------------------------------
-   * Finish stroke
-   * ------------------------------------------------------------
-   */
-
   const finishDrawing = (
     event?: React.PointerEvent<HTMLCanvasElement>
   ) => {
-    if (!isDrawing) {
-      return;
-    }
+    if (!isDrawingRef.current) return;
 
     if (event) {
       event.preventDefault();
-
       try {
-        event.currentTarget.releasePointerCapture(
-          event.pointerId
-        );
+        event.currentTarget.releasePointerCapture(event.pointerId);
       } catch {
         // Ignore.
       }
     }
 
-    setIsDrawing(false);
+    isDrawingRef.current = false;
 
-    const finalPoints = [
-      ...livePointsRef.current,
-    ];
+    const finalPoints = [...livePointsRef.current];
 
-    if (finalPoints.length > 0) {
+    if (finalPoints.length > 0 && (isDrawingMode || isEraserMode)) {
       const id =
-        typeof crypto !== "undefined" &&
-        typeof crypto.randomUUID ===
-          "function"
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
           : `drawing-${Date.now()}-${Math.random()}`;
 
-      const size =
-        isEraserMode
-          ? eraserSize
-          : brushSize;
+      const drawing: SavedDrawing = isDrawingMode
+        ? {
+            id,
+            type: "pen",
+            points: finalPoints,
+            color: brushColor,
+            size: brushSize,
+          }
+        : {
+            id,
+            type: "eraser",
+            points: finalPoints,
+            color: "rgba(0,0,0,1)",
+            size: eraserSize,
+          };
 
-      const drawing: SavedDrawing =
-        isDrawingMode
-          ? {
-              id,
-              type: "pen",
-              points: finalPoints,
-              color: brushColor,
-              size,
-            }
-          : {
-              id,
-              type: "eraser",
-              points: finalPoints,
-              color:
-                "rgba(0,0,0,1)",
-              size,
-            };
-
-      const current =
-        useWorkspaceStore.getState()
-          .drawings;
-
-      setDrawings([
-        ...current,
-        drawing,
-      ]);
+      const current = useWorkspaceStore.getState().drawings;
+      setDrawings([...current, drawing]);
     }
 
     livePointsRef.current = [];
-    lastPointRef.current = null;
-    setLivePoints([]);
+    scheduleRender();
   };
-
-  /*
-   * ------------------------------------------------------------
-   * Pointer Cancel
-   * ------------------------------------------------------------
-   */
 
   const handlePointerCancel = (
     event: React.PointerEvent<HTMLCanvasElement>
   ) => {
-    if (!isDrawing) {
-      return;
-    }
+    if (!isDrawingRef.current) return;
 
     try {
-      event.currentTarget.releasePointerCapture(
-        event.pointerId
-      );
+      event.currentTarget.releasePointerCapture(event.pointerId);
     } catch {
       // Ignore.
     }
 
-    setIsDrawing(false);
-
+    isDrawingRef.current = false;
     livePointsRef.current = [];
-    lastPointRef.current = null;
-
-    setLivePoints([]);
+    scheduleRender();
   };
 
-  const isCanvasActive =
-    isDrawingMode ||
-    isEraserMode;
-
-  /*
-   * ------------------------------------------------------------
-   * Render
-   * ------------------------------------------------------------
-   */
+  const isCanvasActive = isDrawingMode || isEraserMode;
 
   return (
     <canvas
       ref={canvasRef}
-      onPointerDown={
-        handlePointerDown
-      }
-      onPointerMove={
-        handlePointerMove
-      }
-      onPointerUp={
-        finishDrawing
-      }
-      onPointerCancel={
-        handlePointerCancel
-      }
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishDrawing}
+      onPointerCancel={handlePointerCancel}
       className={`absolute inset-0 w-full h-full ${
         isCanvasActive
           ? "z-40 pointer-events-auto select-none"
           : "z-10 pointer-events-none"
       }`}
       style={{
-        touchAction: isCanvasActive
-          ? "none"
-          : "auto",
-
+        touchAction: isCanvasActive ? "none" : "auto",
         userSelect: "none",
         WebkitUserSelect: "none",
-
         cursor: isEraserMode
           ? eraserType === "brush"
             ? "cell"

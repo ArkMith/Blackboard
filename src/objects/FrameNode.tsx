@@ -14,6 +14,7 @@ export default function FrameNode({ id, data, selected }: NodeProps) {
   const title = currentObject?.title ?? data.label ?? "Container Group";
   const width = currentObject?.width ?? data.width ?? 600;
   const height = currentObject?.height ?? data.height ?? 400;
+  const isAndroid = /Android/i.test(navigator.userAgent);
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [localTitle, setLocalTitle] = useState(title);
@@ -117,8 +118,15 @@ export default function FrameNode({ id, data, selected }: NodeProps) {
               style={{ background: "var(--color-bg)", borderColor: "var(--color-border)", color: "var(--color-text)" }}
             />
           ) : (
-            <span 
+            <span
+              data-text-editable="true"
               onDoubleClick={() => setEditingTitle(true)}
+              onPointerUp={(e) => {
+                if (isAndroid) {
+                  e.stopPropagation();
+                  setEditingTitle(true);
+                }
+              }}
               className="hover:opacity-100 transition-opacity cursor-text truncate block px-0.5"
               style={{ opacity: 0.85 }}
               title="Double-click to rename group container"

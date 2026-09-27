@@ -1,4 +1,5 @@
-gi# Logs
+# Logs
+
 logs
 *.log
 npm-debug.log*
@@ -7,20 +8,90 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Dependencies
+
+node_modules/
+
+# Frontend build
+
+dist/
+dist-ssr/
 *.local
 
+# Rust / Tauri
+
+src-tauri/target/
+target/
+Cargo.lock
+
+# Tauri generated Android build output
+
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/.idea/
+src-tauri/gen/android/local.properties
+
+# Android
+
+.gradle/
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Android generated APK / AAB
+
+*.apk
+*.aab
+*.apks
+
+# Signing / keystores
+
+*.jks
+*.keystore
+*.p12
+
+# Environment / secrets
+
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
+
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*.iml
+
+# Temporary / generated archives
+
 *.zip
 *.iss
+
+# OS generated files
+
+Thumbs.db
+Desktop.ini
+
+# Coverage
+
+coverage/
+.nyc_output/
+
+# TypeScript
+
+*.tsbuildinfo
+
+
+# Android signing
+*.jks
+*.keystore
+keystore/

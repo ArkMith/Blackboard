@@ -16,6 +16,7 @@ import {
   AppWindow,
   Download,
   Trash2,
+  MoreVertical,
   Check,
   Plus,
   Minimize2,
@@ -37,7 +38,7 @@ import { toPng } from "html-to-image";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import DrawingCanvas from "../components/DrawingCanvas";
 import CustomEdge from "../components/CustomEdge";
-import { DEFAULT_APP_SETTINGS, loadAppSettings, saveAppSettings } from "../utils/localStore";
+import { DEFAULT_APP_SETTINGS, loadAppSettings, saveAppSettings, flushLocalStore } from "../utils/localStore";
 
 import CardNode from "../objects/CardNode";
 import CompactNode from "../objects/CompactNode";
@@ -85,16 +86,46 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
   useEffect(() => {
     if (!store.currentWorkspaceId) return;
 
+    // Keep normal editing responsive. The final state is also explicitly
+    // flushed before leaving the workspace, so a short debounce cannot lose
+    // the last edit on Android.
     const delayDebounceSave = setTimeout(() => {
-      store.saveCanvasToCloud();
-    }, 800);
+      void store.saveCanvasToCloud();
+    }, 350);
 
     return () => clearTimeout(delayDebounceSave);
-  }, [store.objects, store.edges, store.drawings]);
+  }, [store.currentWorkspaceId, store.objects, store.edges, store.drawings]);
+
+  useEffect(() => {
+    const saveBeforeSuspension = () => {
+      if (document.visibilityState === "hidden") {
+        void store.saveCanvasToCloud();
+      }
+    };
+
+    document.addEventListener("visibilitychange", saveBeforeSuspension);
+    window.addEventListener("pagehide", saveBeforeSuspension);
+
+    return () => {
+      document.removeEventListener("visibilitychange", saveBeforeSuspension);
+      window.removeEventListener("pagehide", saveBeforeSuspension);
+    };
+  }, [store.saveCanvasToCloud]);
 
   // Handle dynamic thumbnail capture and clean exit back to dashboard
   const handleExitWithThumbnail = async () => {
     const wsId = store.currentWorkspaceId;
+
+    // Never leave the workspace until its latest canvas state has reached
+    // persistent storage. This is especially important on Android where the
+    // OS can suspend the WebView immediately after navigation.
+    try {
+      await store.saveCanvasToCloud();
+      await flushLocalStore();
+    } catch (err) {
+      console.error("[Workspace] Failed to flush canvas before exit:", err);
+    }
+
     const viewportElement = document.querySelector(".react-flow__viewport") as HTMLElement;
 
     if (wsId && viewportElement && reactFlowInstance) {
@@ -170,15 +201,22 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
   // Top Bar Dropdown Menus state
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    const handlePointerDownOutside = (e: PointerEvent) => {
+      const target = e.target as Node;
+      const insideDesktopMenu = !!menuRef.current?.contains(target);
+      const insideMobileMenu = !!mobileMenuRef.current?.contains(target);
+
+      if (!insideDesktopMenu && !insideMobileMenu) {
         setActiveMenu(null);
+        setIsPickerOpen(false);
       }
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+
+    document.addEventListener("pointerdown", handlePointerDownOutside);
+    return () => document.removeEventListener("pointerdown", handlePointerDownOutside);
   }, []);
 
   // Workspace Settings States
@@ -791,6 +829,275 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
   };
 
   const isCanvasActive = isDrawingMode || isEraserMode;
+  const isAndroid = /Android/i.test(navigator.userAgent);
+
+  // ------------------------------------------------------------------
+  // Android touch gesture system
+  // ------------------------------------------------------------------
+  // ReactFlow's own panOnDrag / zoomOnPinch / panOnScroll / zoomOnScroll are
+  // switched off on Android whenever the select tool is active (see the
+  // <ReactFlow> props below), and everything touch-related is handled by
+  // this single state machine instead. Having exactly one thing ever move
+  // the viewport is what fixes the old bug where the canvas and the
+  // dragged object drifted together: previously ReactFlow's own pan
+  // gesture and this custom drag logic were both alive at once, each
+  // reacting to the same finger, so moving the node was computed against
+  // a viewport that was itself silently shifting underneath it.
+  //
+  //   1 finger, empty canvas   -> pan immediately
+  //   1 finger, on an object   -> wait ~450ms without moving, then switch
+  //                                to dragging that object; if the finger
+  //                                moves first, it's treated as a pan
+  //   2 fingers (any time)     -> pinch-zoom + two-finger pan; this always
+  //                                wins, dropping/committing any pending
+  //                                or in-progress object drag first
+  //   a finger lifts mid-pinch -> re-baselines so the remaining finger
+  //                                keeps panning smoothly, no jump
+  //
+  // Text fields, buttons, handles and resize controls are left completely
+  // alone so taps and typing keep working as normal.
+  const ANDROID_INTERACTIVE_SELECTOR =
+    'button, input, textarea, select, [contenteditable="true"], .nodrag, .react-flow__handle, .react-flow__resize-control';
+  const ANDROID_LONG_PRESS_MS = 450;
+  const ANDROID_MOVE_THRESHOLD = 10;
+
+  type AndroidPoint = { x: number; y: number };
+  type AndroidGesture =
+    | { mode: "pending"; pointerId: number; nodeId: string; startScreen: AndroidPoint }
+    | {
+        mode: "pan";
+        startViewport: { x: number; y: number; zoom: number };
+        startMid: AndroidPoint;
+        startDistance: number | null;
+      }
+    | {
+        mode: "drag";
+        pointerId: number;
+        nodeId: string;
+        startFlow: AndroidPoint;
+        startPosition: AndroidPoint;
+        currentPosition: AndroidPoint;
+      };
+
+  // NOTE: `new globalThis.Map()` (not `new Map()`) because this file also
+  // imports the unrelated "Map" icon from lucide-react, which shadows the
+  // built-in Map constructor for the rest of this module.
+  const androidPointersRef = useRef<globalThis.Map<number, AndroidPoint>>(new globalThis.Map());
+  const androidLongPressTimerRef = useRef<number | null>(null);
+  const androidGestureRef = useRef<AndroidGesture | null>(null);
+
+  const cancelAndroidLongPress = () => {
+    if (androidLongPressTimerRef.current !== null) {
+      window.clearTimeout(androidLongPressTimerRef.current);
+      androidLongPressTimerRef.current = null;
+    }
+  };
+
+  // Recomputes the pan/pinch baseline from whatever fingers are currently
+  // down. Called on every transition into panning, and whenever the finger
+  // count changes mid-gesture, so the transform never jumps.
+  const rebaseAndroidPan = () => {
+    if (!reactFlowInstance || androidPointersRef.current.size === 0) {
+      androidGestureRef.current = null;
+      return;
+    }
+
+    const pointers = Array.from(androidPointersRef.current.values());
+    const startViewport = reactFlowInstance.getViewport();
+    const startMid =
+      pointers.length >= 2
+        ? { x: (pointers[0].x + pointers[1].x) / 2, y: (pointers[0].y + pointers[1].y) / 2 }
+        : pointers[0];
+    const startDistance =
+      pointers.length >= 2 ? Math.hypot(pointers[0].x - pointers[1].x, pointers[0].y - pointers[1].y) : null;
+
+    androidGestureRef.current = { mode: "pan", startViewport, startMid, startDistance };
+  };
+
+  const commitAndroidDrag = () => {
+    const gesture = androidGestureRef.current;
+    if (gesture?.mode === "drag") {
+      useWorkspaceStore.getState().moveObject(gesture.nodeId, gesture.currentPosition.x, gesture.currentPosition.y);
+    }
+  };
+
+  useEffect(() => {
+    if (!isAndroid) return;
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!androidPointersRef.current.has(event.pointerId)) return;
+      androidPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+      const gesture = androidGestureRef.current;
+      if (!gesture || !reactFlowInstance) return;
+
+      if (gesture.mode === "pending") {
+        if (gesture.pointerId !== event.pointerId) return;
+        const distance = Math.hypot(event.clientX - gesture.startScreen.x, event.clientY - gesture.startScreen.y);
+        if (distance > ANDROID_MOVE_THRESHOLD) {
+          // Moved before the hold fired: this is a pan, not an object drag.
+          cancelAndroidLongPress();
+          rebaseAndroidPan();
+        }
+        return;
+      }
+
+      if (gesture.mode === "drag") {
+        if (gesture.pointerId !== event.pointerId) return;
+        event.preventDefault();
+
+        const currentFlow = reactFlowInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+        const nextPosition = {
+          x: gesture.startPosition.x + (currentFlow.x - gesture.startFlow.x),
+          y: gesture.startPosition.y + (currentFlow.y - gesture.startFlow.y),
+        };
+        gesture.currentPosition = nextPosition;
+
+        setNodes((current) =>
+          current.map((candidate) => (candidate.id === gesture.nodeId ? { ...candidate, position: nextPosition } : candidate))
+        );
+        return;
+      }
+
+      // mode === "pan": one finger pans, two fingers pinch-zoom and pan at
+      // once. Both cases are the same formula: keep the flow-space point
+      // that was under the gesture's start midpoint anchored under the
+      // (possibly moving, possibly spreading) current midpoint.
+      event.preventDefault();
+      const pointers = Array.from(androidPointersRef.current.values());
+      if (pointers.length === 0) return;
+
+      const mid =
+        pointers.length >= 2
+          ? { x: (pointers[0].x + pointers[1].x) / 2, y: (pointers[0].y + pointers[1].y) / 2 }
+          : pointers[0];
+
+      let nextZoom = gesture.startViewport.zoom;
+      if (pointers.length >= 2 && gesture.startDistance) {
+        const distance = Math.hypot(pointers[0].x - pointers[1].x, pointers[0].y - pointers[1].y);
+        nextZoom = Math.min(2.5, Math.max(0.05, gesture.startViewport.zoom * (distance / gesture.startDistance)));
+      }
+
+      const flowAnchorX = (gesture.startMid.x - gesture.startViewport.x) / gesture.startViewport.zoom;
+      const flowAnchorY = (gesture.startMid.y - gesture.startViewport.y) / gesture.startViewport.zoom;
+
+      reactFlowInstance.setViewport(
+        { x: mid.x - flowAnchorX * nextZoom, y: mid.y - flowAnchorY * nextZoom, zoom: nextZoom },
+        { duration: 0 }
+      );
+    };
+
+    const onPointerEnd = (event: PointerEvent) => {
+      if (!androidPointersRef.current.has(event.pointerId)) return;
+
+      const gesture = androidGestureRef.current;
+      if (gesture?.mode === "pending" && gesture.pointerId === event.pointerId) {
+        cancelAndroidLongPress();
+        androidGestureRef.current = null;
+      } else if (gesture?.mode === "drag" && gesture.pointerId === event.pointerId) {
+        commitAndroidDrag();
+        androidGestureRef.current = null;
+      }
+
+      androidPointersRef.current.delete(event.pointerId);
+
+      if (androidPointersRef.current.size === 0) {
+        cancelAndroidLongPress();
+        androidGestureRef.current = null;
+      } else if (androidGestureRef.current?.mode === "pan") {
+        // A finger lifted mid-pinch/pan: rebase so the rest keep going
+        // smoothly instead of jumping to a stale baseline.
+        rebaseAndroidPan();
+      }
+    };
+
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerEnd, true);
+    window.addEventListener("pointercancel", onPointerEnd, true);
+
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerEnd, true);
+      window.removeEventListener("pointercancel", onPointerEnd, true);
+    };
+  }, [isAndroid, reactFlowInstance, setNodes]);
+
+  const handleAndroidPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isAndroid || isCanvasActive || !reactFlowInstance) return;
+
+    const target = event.target as HTMLElement;
+    // Text fields, buttons, handles, resize controls, etc. keep their
+    // normal behavior. In particular, do not turn a text-field tap into a
+    // pan or a drag.
+    if (target.closest(ANDROID_INTERACTIVE_SELECTOR)) return;
+
+    androidPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (androidPointersRef.current.size >= 2) {
+      // A second finger always means navigation. Commit any in-progress
+      // object drag first so no movement is lost, then hand off to pinch/pan.
+      cancelAndroidLongPress();
+      commitAndroidDrag();
+      rebaseAndroidPan();
+      return;
+    }
+
+    const nodeElement = target.closest(".react-flow__node") as HTMLElement | null;
+    const nodeId = nodeElement?.getAttribute("data-id") ?? null;
+
+    if (!nodeId) {
+      // Empty canvas: pan right away, no need to wait on a long-press.
+      rebaseAndroidPan();
+      return;
+    }
+
+    // Select immediately, whether this turns into a tap, a pan, or a drag.
+    setNodes((current) => current.map((candidate) => ({ ...candidate, selected: candidate.id === nodeId })));
+
+    cancelAndroidLongPress();
+    androidGestureRef.current = {
+      mode: "pending",
+      pointerId: event.pointerId,
+      nodeId,
+      startScreen: { x: event.clientX, y: event.clientY },
+    };
+
+    androidLongPressTimerRef.current = window.setTimeout(() => {
+      androidLongPressTimerRef.current = null;
+
+      const gesture = androidGestureRef.current;
+      if (!gesture || gesture.mode !== "pending" || gesture.pointerId !== event.pointerId) return;
+      if (androidPointersRef.current.size !== 1) return;
+
+      const latest = androidPointersRef.current.get(event.pointerId);
+      const liveNode = reactFlowInstance.getNode(nodeId);
+      if (!latest || !liveNode) return;
+
+      // The finger must still be close to its original position. If it
+      // moved, the "pending" -> "pan" handoff already happened above.
+      const distance = Math.hypot(latest.x - gesture.startScreen.x, latest.y - gesture.startScreen.y);
+      if (distance > ANDROID_MOVE_THRESHOLD) return;
+
+      const startFlow = reactFlowInstance.screenToFlowPosition(latest);
+
+      androidGestureRef.current = {
+        mode: "drag",
+        pointerId: event.pointerId,
+        nodeId,
+        startFlow,
+        startPosition: { x: liveNode.position.x, y: liveNode.position.y },
+        currentPosition: { x: liveNode.position.x, y: liveNode.position.y },
+      };
+    }, ANDROID_LONG_PRESS_MS);
+  };
+
+  useEffect(() => {
+    return () => {
+      cancelAndroidLongPress();
+      androidGestureRef.current = null;
+      androidPointersRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if ((window as any).__TAURI_INTERNALS__) {
@@ -875,12 +1182,12 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
         e.stopPropagation();
       }}
       onDrop={handleCanvasDrop}
-      className={`h-screen w-screen transition-colors duration-200 overflow-hidden relative select-none font-body antialiased ${
+      className={`h-screen w-screen transition-colors duration-200 overflow-hidden relative select-none font-body antialiased ${isAndroid ? "blackboard-android" : ""} ${
         isDarkMode ? "bg-[#0f0d0b] text-[#f4e8dc]" : "bg-[#f1f3f4] text-[#2a2421]"
       }`}
     >
       {/* TOP MENU & QUICK BAR */}
-      <div ref={menuRef} className="absolute top-0 left-0 right-0 z-50 flex flex-col font-body select-none">
+      <div ref={menuRef} className={`${isAndroid ? "hidden" : ""} absolute top-0 left-0 right-0 z-50 flex flex-col font-body select-none`}>
         {/* Tier 1: Menu Bar */}
         <div className="h-7 bg-[#f0f0f0] text-slate-800 border-b border-slate-300 flex items-center justify-between px-2 text-xs">
           <div className="flex items-center gap-1 relative">
@@ -1463,8 +1770,249 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
         </div>
       </div>
 
+      {/* ANDROID MAIN TOOL + MENU BAR */}
+      {isAndroid && (
+        <div ref={mobileMenuRef}>
+          {/* Slim header: back, workspace name, more */}
+          <div
+            className="absolute top-0 left-0 right-0 z-50 h-14 flex items-center gap-2 px-3 border-b shadow-lg backdrop-blur-xl"
+            style={{
+              background: isDarkMode ? "rgba(20,16,13,0.96)" : "rgba(255,255,255,0.96)",
+              borderColor: isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+              paddingTop: "env(safe-area-inset-top)",
+              height: "calc(3.5rem + env(safe-area-inset-top))",
+            }}
+          >
+            <button
+              onClick={handleExitWithThumbnail}
+              className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+              style={{ color: "var(--color-text)", background: "var(--color-surface-hover)" }}
+              aria-label="Back to dashboard"
+            >
+              <AppWindow size={18} />
+            </button>
+
+            <div className="min-w-0 flex-1 px-1">
+              <div className="text-[10px] font-bold uppercase tracking-wider truncate" style={{ color: "var(--color-muted)" }}>
+                Blackboard
+              </div>
+              <div className="text-[13px] font-semibold truncate" style={{ color: "var(--color-text)" }}>
+                {store.workspacesList.find((w) => w.id === store.currentWorkspaceId)?.name || "Untitled"}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setActiveMenu(activeMenu === "mobile" ? null : "mobile")}
+              className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+              style={{
+                color: activeMenu === "mobile" ? "#fff" : "var(--color-text)",
+                background: activeMenu === "mobile" ? "var(--color-accent)" : "var(--color-surface-hover)",
+              }}
+              aria-label="More tools and menu"
+            >
+              <MoreVertical size={19} />
+            </button>
+          </div>
+
+          {/* Draw/erase context controls float just above the bottom dock */}
+          {isCanvasActive && (
+            <div
+              className="absolute left-2 right-2 z-[60] rounded-2xl border px-3 py-2 flex items-center gap-3 overflow-x-auto shadow-xl"
+              style={{
+                bottom: "calc(5.75rem + env(safe-area-inset-bottom))",
+                background: isDarkMode ? "rgba(20,16,13,0.97)" : "rgba(255,255,255,0.97)",
+                borderColor: "var(--color-border)",
+              }}
+            >
+              {isDrawingMode && (
+                <>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {recentColors.slice(0, 6).map((c) => (
+                      <button key={c} onClick={() => { selectBrushColor(c); setTempCustomColor(c); }} className="w-7 h-7 rounded-full border-2" style={{ backgroundColor: c, borderColor: brushColor.toLowerCase() === c.toLowerCase() ? "#fff" : "transparent" }} aria-label={`Brush color ${c}`} />
+                    ))}
+                    <label className="relative shrink-0" title="Choose custom brush color">
+                      <input
+                        type="color"
+                        value={brushColor}
+                        onChange={(e) => {
+                          setTempCustomColor(e.target.value);
+                          selectBrushColor(e.target.value);
+                        }}
+                        className="absolute inset-0 w-8 h-8 opacity-0 cursor-pointer"
+                        aria-label="Custom brush color"
+                      />
+                      <span
+                        className="w-8 h-8 rounded-full border-2 border-dashed flex items-center justify-center"
+                        style={{ borderColor: "var(--color-border)", color: "var(--color-text)" }}
+                      >
+                        <Plus size={15} />
+                      </span>
+                    </label>
+                  </div>
+                  <div className="w-px h-6 shrink-0" style={{ background: "var(--color-border)" }} />
+                  <span className="text-[10px] font-mono shrink-0" style={{ color: "var(--color-muted)" }}>{brushSize}px</span>
+                  <input type="range" min={5} max={100} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-28 shrink-0 accent-[var(--color-accent)]" />
+                  <button onClick={undoDrawing} className="w-9 h-9 shrink-0 rounded-xl flex items-center justify-center" style={{ color: "var(--color-muted)" }}><Undo2 size={17} /></button>
+                  <button onClick={redoDrawing} className="w-9 h-9 shrink-0 rounded-xl flex items-center justify-center" style={{ color: "var(--color-muted)" }}><Redo2 size={17} /></button>
+                  <button onClick={confirmClearDrawings} className="w-9 h-9 shrink-0 rounded-xl flex items-center justify-center text-rose-400"><Trash2 size={17} /></button>
+                </>
+              )}
+              {isEraserMode && (
+                <>
+                  <button onClick={() => setEraserType("stroke")} className={`px-3 h-9 rounded-xl text-xs shrink-0 ${eraserType === "stroke" ? "text-white" : ""}`} style={{ background: eraserType === "stroke" ? "var(--color-accent)" : "var(--color-surface-hover)" }}>Stroke</button>
+                  <button onClick={() => setEraserType("brush")} className={`px-3 h-9 rounded-xl text-xs shrink-0 ${eraserType === "brush" ? "text-white" : ""}`} style={{ background: eraserType === "brush" ? "var(--color-accent)" : "var(--color-surface-hover)" }}>Brush</button>
+                  {eraserType === "brush" && <><span className="text-[10px] font-mono shrink-0" style={{ color: "var(--color-muted)" }}>{eraserSize}px</span><input type="range" min={5} max={100} value={eraserSize} onChange={(e) => setEraserSize(Number(e.target.value))} className="w-28 shrink-0 accent-[var(--color-accent)]" /></>}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Quick-add popover, floats just above the dock */}
+          {activeMenu === "quickadd" && (
+            <div
+              className="absolute left-1/2 -translate-x-1/2 z-[65] grid grid-cols-4 gap-2 rounded-2xl border p-2.5 shadow-2xl"
+              style={{
+                bottom: "calc(5.75rem + env(safe-area-inset-bottom))",
+                background: isDarkMode ? "rgba(25,20,16,0.98)" : "rgba(255,255,255,0.98)",
+                borderColor: "var(--color-border)",
+              }}
+            >
+              {[
+                { icon: <Square size={18} />, label: "Card", action: addCard },
+                { icon: <StickyNote size={18} />, label: "Note", action: addCompact },
+                { icon: <LayoutGrid size={18} />, label: "Frame", action: addFrame },
+                { icon: <Sparkles size={18} />, label: "Asset", action: addAssetPipelineNode },
+                { icon: <Map size={18} />, label: "Image", action: openImagePicker },
+                { icon: <FileText size={18} />, label: "PDF", action: openPdfPicker, disabled: isImportingPdf },
+                { icon: <Calendar size={18} />, label: "Timeline", action: addTimelineNode },
+                { icon: <Type size={18} />, label: "Text", action: () => addTextBlockNode("textBlock") },
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  disabled={item.disabled}
+                  onClick={() => { item.action(); setActiveMenu(null); }}
+                  className="w-14 h-14 rounded-xl flex flex-col items-center justify-center gap-1 disabled:opacity-40 active:scale-95 transition-transform"
+                  style={{ background: "var(--color-surface-hover)", color: "var(--color-text)" }}
+                >
+                  {item.icon}
+                  <span className="text-[9px] font-medium">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Floating bottom dock: primary tools within thumb's reach */}
+          <div
+            className="absolute left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 rounded-full border px-2 py-1.5 shadow-2xl backdrop-blur-xl"
+            style={{
+              bottom: "calc(1rem + env(safe-area-inset-bottom))",
+              background: isDarkMode ? "rgba(20,16,13,0.96)" : "rgba(255,255,255,0.96)",
+              borderColor: isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+            }}
+          >
+            <button
+              onClick={() => selectTool("select")}
+              className="shrink-0 w-11 h-11 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+              style={{ background: !isCanvasActive ? "var(--color-accent)" : "transparent", color: !isCanvasActive ? "#fff" : "var(--color-muted)" }}
+              aria-label="Select tool"
+            >
+              <MousePointer size={19} />
+            </button>
+            <button
+              onClick={() => selectTool("draw")}
+              className="shrink-0 w-11 h-11 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+              style={{ background: isDrawingMode ? "var(--color-accent)" : "transparent", color: isDrawingMode ? "#fff" : "var(--color-muted)" }}
+              aria-label="Ink brush"
+            >
+              <Pencil size={19} />
+            </button>
+            <button
+              onClick={() => selectTool("erase")}
+              className="shrink-0 w-11 h-11 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+              style={{ background: isEraserMode ? "var(--color-accent)" : "transparent", color: isEraserMode ? "#fff" : "var(--color-muted)" }}
+              aria-label="Eraser"
+            >
+              <Eraser size={19} />
+            </button>
+
+            <div className="w-px h-6 shrink-0 mx-0.5" style={{ background: "var(--color-border)" }} />
+
+            <button
+              onClick={() => setActiveMenu(activeMenu === "quickadd" ? null : "quickadd")}
+              className="shrink-0 w-11 h-11 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+              style={{ background: activeMenu === "quickadd" ? "var(--color-accent)" : "transparent", color: activeMenu === "quickadd" ? "#fff" : "var(--color-muted)" }}
+              aria-label="Add object"
+            >
+              <Plus size={21} />
+            </button>
+
+            <div className="w-px h-6 shrink-0 mx-0.5" style={{ background: "var(--color-border)" }} />
+
+            <button onClick={undoDrawing} className="shrink-0 w-11 h-11 rounded-full flex items-center justify-center active:scale-90 transition-transform" style={{ color: "var(--color-muted)" }} aria-label="Undo">
+              <Undo2 size={19} />
+            </button>
+            <button onClick={redoDrawing} className="shrink-0 w-11 h-11 rounded-full flex items-center justify-center active:scale-90 transition-transform" style={{ color: "var(--color-muted)" }} aria-label="Redo">
+              <Redo2 size={19} />
+            </button>
+          </div>
+
+          {/* "More" bottom sheet */}
+          {activeMenu === "mobile" && (
+            <>
+              <div className="fixed inset-0 z-[69] bg-black/40" onClick={() => setActiveMenu(null)} />
+              <div
+                className="absolute left-0 right-0 bottom-0 z-[70] max-h-[75vh] overflow-y-auto rounded-t-3xl border-t shadow-2xl p-3"
+                style={{
+                  background: isDarkMode ? "rgba(25,20,16,0.98)" : "rgba(255,255,255,0.98)",
+                  borderColor: "var(--color-border)",
+                  color: "var(--color-text)",
+                  paddingBottom: "calc(1rem + env(safe-area-inset-bottom))",
+                }}
+              >
+                <div className="mx-auto mb-3 h-1.5 w-10 rounded-full" style={{ background: "var(--color-border)" }} />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => { handleExitWithThumbnail(); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2" style={{ background: "var(--color-surface-hover)" }}>
+                    <FolderOpen size={17} /> <span className="text-xs font-semibold">Dashboard</span>
+                  </button>
+                  <button onClick={() => { store.exportWorkspace(); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2" style={{ background: "var(--color-surface-hover)" }}>
+                    <Download size={17} /> <span className="text-xs font-semibold">Export</span>
+                  </button>
+                </div>
+
+                <div className="mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-1" style={{ color: "var(--color-muted)" }}>Insert</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => { addFrame(); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2" style={{ background: "var(--color-surface-hover)" }}><LayoutGrid size={16} /> <span className="text-xs">Frame</span></button>
+                  <button onClick={() => { addAssetPipelineNode(); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2" style={{ background: "var(--color-surface-hover)" }}><Sparkles size={16} /> <span className="text-xs">Asset</span></button>
+                  <button onClick={() => { addTimelineNode(); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2" style={{ background: "var(--color-surface-hover)" }}><Calendar size={16} /> <span className="text-xs">Timeline</span></button>
+                  <button onClick={() => { addTextBlockNode("textBlock"); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2" style={{ background: "var(--color-surface-hover)" }}><Type size={16} /> <span className="text-xs">Text</span></button>
+                </div>
+
+                <div className="mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-1" style={{ color: "var(--color-muted)" }}>View</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => { setShowMiniMap((value) => !value); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center justify-between" style={{ background: "var(--color-surface-hover)" }}><span className="text-xs">MiniMap</span>{showMiniMap && <Check size={16} />}</button>
+                  <button onClick={() => { setShowBg((value) => !value); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center justify-between" style={{ background: "var(--color-surface-hover)" }}><span className="text-xs">Grid</span>{showBg && <Check size={16} />}</button>
+                  <button onClick={() => { setIsDarkMode((value) => !value); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center justify-between" style={{ background: "var(--color-surface-hover)" }}><span className="text-xs">Dark Theme</span>{isDarkMode && <Check size={16} />}</button>
+                  <button onClick={() => { reactFlowInstance?.fitView({ padding: 0.2 }); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2" style={{ background: "var(--color-surface-hover)" }}><Minimize2 size={16} /> <span className="text-xs">Fit View</span></button>
+                </div>
+
+                <div className="mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-1" style={{ color: "var(--color-muted)" }}>Canvas</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => { confirmDeleteSelected(); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2 text-rose-400" style={{ background: "var(--color-surface-hover)" }}><Trash2 size={16} /> <span className="text-xs">Delete Selected</span></button>
+                  <button onClick={() => { confirmClearDrawings(); setActiveMenu(null); }} className="p-3 rounded-xl text-left flex items-center gap-2 text-rose-400" style={{ background: "var(--color-surface-hover)" }}><Trash2 size={16} /> <span className="text-xs">Clear Ink</span></button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* CANVAS CONTAINER */}
-      <div className="absolute top-16 left-0 right-0 bottom-0">
+      <div
+        className={`absolute ${isAndroid ? "top-[calc(3.5rem+env(safe-area-inset-top))]" : "top-16"} left-0 right-0 bottom-0`}
+        style={isAndroid ? { touchAction: "none" } : undefined}
+        onPointerDownCapture={handleAndroidPointerDownCapture}
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1474,9 +2022,18 @@ export default function Workspace({ onBackToMenu }: { onBackToMenu: () => void }
           onEdgesChange={handleEdgesChange}
           onConnect={onConnect}
           onNodeDragStop={handleNodeDragStop}
+          nodesDraggable={!isAndroid}
+          noPanClassName="nopan"
           onInit={setReactFlowInstance}
-          panOnDrag={!isCanvasActive}
-          selectionOnDrag={!isCanvasActive}
+          // On Android with the select tool active, panning/pinch-zoom is
+          // handled entirely by handleAndroidPointerDownCapture above so it
+          // can never run at the same time as the long-press object drag.
+          // While drawing/erasing, our handler steps aside entirely, so
+          // pinch-zoom is handed back to ReactFlow (single-finger strokes
+          // still go to the ink layer, which sits above the pane).
+          panOnDrag={isAndroid ? false : !isCanvasActive}
+          selectionOnDrag={isAndroid ? false : !isCanvasActive}
+          zoomOnPinch={isAndroid ? isCanvasActive : true}
           panOnScroll={true}
           zoomOnScroll={true}
           fitViewOptions={{ padding: 0.2 }}

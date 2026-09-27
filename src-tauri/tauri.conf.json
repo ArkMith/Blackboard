@@ -1,15 +1,14 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Blackboard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "identifier": "com.arkmith.blackboard",
-    "build": {
+  "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:8080",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
-
   "app": {
     "windows": [
       {
@@ -39,7 +38,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "copyright": "© 2026 Ark Mith. All rights reserved.",
+    "copyright": "\u00a9 2026 Ark Mith. All rights reserved.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -51,14 +50,16 @@
       "debugApplicationIdSuffix": ".debug"
     },
     "fileAssociations": [
-    {
-      "ext": ["pdf"],
-      "mimeType": "application/pdf",
-      "name": "PDF Document",
-      "description": "PDF document",
-      "role": "Viewer",
-      "rank": "Alternate"
-    }
-  ]
+      {
+        "ext": [
+          "pdf"
+        ],
+        "mimeType": "application/pdf",
+        "name": "Blackboard PDF Document",
+        "description": "Open PDF documents in Blackboard",
+        "role": "Viewer",
+        "rank": "Alternate"
+      }
+    ]
   }
 }

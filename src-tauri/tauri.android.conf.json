@@ -1,0 +1,11 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Blackboard",
+        "label": "main",
+        "visible": true
+      }
+    ]
+  }
+}

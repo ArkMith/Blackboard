@@ -137,12 +137,28 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   saveCanvasToCloud: async () => {
     const wsId = get().currentWorkspaceId;
     if (!wsId) return;
+
     try {
-      await localSet<WorkspaceCanvasData>(canvasKey(wsId), {
+      const canvas: WorkspaceCanvasData = {
         objects: get().objects,
         edges: get().edges,
         drawings: get().drawings,
-      });
+      };
+
+      await localSet<WorkspaceCanvasData>(canvasKey(wsId), canvas);
+
+      // Keep the dashboard metadata in sync with the actual board save.
+      const updatedAt = new Date().toISOString();
+      const updatedList = get().workspacesList.map((workspace) =>
+        workspace.id === wsId
+          ? { ...workspace, updatedAt }
+          : workspace
+      );
+
+      if (updatedList !== get().workspacesList) {
+        set({ workspacesList: updatedList });
+        await localSet(WORKSPACES_INDEX_KEY, updatedList);
+      }
     } catch (err) {
       console.error("[bishop] failed to save canvas to disk:", err);
     }

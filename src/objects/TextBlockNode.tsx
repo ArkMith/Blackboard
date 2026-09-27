@@ -15,6 +15,7 @@ export default function TextBlockNode({ id, data, selected }: NodeProps) {
   // Width is user-adjustable; height stays content-driven (auto) so wrapped text
   // never gets clipped -- see EdgeResizeHandle usage below.
   const width = currentObject?.width ?? data.width ?? 220;
+  const isAndroid = /Android/i.test(navigator.userAgent);
 
   const [editing, setEditing] = useState(false);
   const [localText, setLocalText] = useState(textContent);
@@ -83,7 +84,15 @@ export default function TextBlockNode({ id, data, selected }: NodeProps) {
           />
         ) : (
           <div
+            data-text-editable="true"
             onDoubleClick={() => { setLocalText(textContent); setEditing(true); }}
+            onPointerUp={(e) => {
+              if (isAndroid) {
+                e.stopPropagation();
+                setLocalText(textContent);
+                setEditing(true);
+              }
+            }}
             className="cursor-text whitespace-pre-wrap break-words leading-relaxed p-0.5 min-h-[16px]"
             style={
               textContent
